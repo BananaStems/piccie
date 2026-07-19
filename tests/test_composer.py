@@ -175,4 +175,7 @@ def test_fit_text_width_only_ignores_height():
         draw, text, box, loader, max_size=70, min_size=20, width_only=True
     )
     assert width_only.size > height_limited.size
-    assert width_only.size >= 50
+    fitted_width, _ = _text_size(draw, text, width_only)
+    next_width, _ = _text_size(draw, text, loader(width_only.size + 1))
+    assert fitted_width <= box[2]
+    assert width_only.size == 70 or next_width > box[2]
