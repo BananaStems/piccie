@@ -1,0 +1,15 @@
+[Unit]
+Description=Piccie first-boot /data seed
+# /data is mounted by systemd from fstab; run after it is available and before
+# anything that reads it (NetworkManager keyfiles, provisioning).
+After=data-fallback.service local-fs.target
+Before=NetworkManager.service piccie-engine.service
+ConditionPathExists=!/data/.datapart-done
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/piccie-firstboot-datapart
+
+[Install]
+WantedBy=multi-user.target

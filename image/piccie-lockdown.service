@@ -1,0 +1,13 @@
+[Unit]
+Description=Enable read-only root overlay after first-boot provisioning
+After=data-fallback.service
+ConditionPathExists=/data/.provisioned
+ConditionPathExists=!/data/.lockdown-done
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/piccie-lockdown
+
+[Install]
+WantedBy=multi-user.target

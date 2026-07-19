@@ -1,0 +1,7 @@
+proc            /proc           proc    defaults                                                                                                            0  0
+BOOTDEV  /boot/firmware  vfat    defaults,flush,noatime,nofail,x-systemd.device-timeout=60s                                                                  0  2
+ROOTDEV  /               ext4    defaults,noatime,errors=remount-ro                                                                                          0  1
+DATADEV  /data           ext4    defaults,noatime,nodiratime,commit=5,errors=remount-ro,nofail,x-systemd.device-timeout=60s,x-systemd.before=NetworkManager.service  0  2
+tmpfs    /tmp            tmpfs   defaults,noatime,nosuid,nodev,size=128M                                                                                     0  0
+tmpfs    /var/tmp        tmpfs   defaults,noatime,nosuid,nodev,size=64M                                                                                      0  0
+tmpfs    /var/log        tmpfs   defaults,noatime,nosuid,nodev,size=64M,mode=0755                                                                            0  0

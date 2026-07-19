@@ -1,0 +1,52 @@
+#!/bin/sh
+# Installed to /home/pi/.config/openbox/autostart.
+# Runs INSIDE pi's X session, so it inherits DISPLAY, XAUTHORITY,
+# XDG_RUNTIME_DIR and HOME=/home/pi for free. This replaces the
+# piccie-kiosk systemd service, which ran on multi-user.target with no
+# session environment and therefore could never attach to the X server.
+
+# Keep the screen awake (no blanking / DPMS on a kiosk).
+xset s off
+xset -dpms
+xset s noblank
+
+# Best-effort: force the panel's native 1024x600. vc4-kms won't auto-offer it
+# (the panel reports no EDID), so X picks a larger fallback that makes the UI
+# render small on the physical panel. If this fails, the CSS scale-to-fit in the
+# web app still fills the screen — this just makes it pixel-sharp at native res.
+if command -v xrandr >/dev/null 2>&1; then
+  OUT=$(xrandr 2>/dev/null | awk '/ connected/{print $1; exit}')
+  if [ -n "$OUT" ]; then
+    xrandr --newmode "1024x600_60" 49.00 1024 1072 1168 1312 600 603 613 624 -hsync +vsync 2>/dev/null
+    xrandr --addmode "$OUT" "1024x600_60" 2>/dev/null
+    xrandr --output "$OUT" --mode "1024x600_60" 2>/dev/null
+  fi
+fi
+
+# Watchdog: an --app Chromium window that loads while the engine is down parks on
+# a connection-error page and never navigates back. The engine has Restart=always
+# (~3s), so if /api/status stays dead for ~30s, kill Chromium and let the loop
+# below relaunch a fresh kiosk once the engine is answering again.
+URL="http://localhost:8080"
+(
+  fails=0
+  while true; do
+    sleep 5
+    if curl -sf "$URL/api/status" >/dev/null 2>&1; then
+      fails=0
+    else
+      fails=$((fails + 1))
+      if [ "$fails" -ge 6 ]; then
+        pkill -f "chromium.*--app=$URL" 2>/dev/null || pkill -x chromium 2>/dev/null || true
+        fails=0
+      fi
+    fi
+  done
+) &
+
+# Launch (and relaunch on crash / watchdog kill) the kiosk browser.
+while true; do
+  until curl -sf "$URL/api/status" >/dev/null 2>&1; do sleep 1; done
+  /usr/local/bin/piccie-kiosk
+  sleep 3
+done &

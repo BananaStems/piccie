@@ -1,0 +1,7 @@
+// The local kiosk engine runs as pi and must switch venue Wi-Fi without a
+// desktop polkit prompt. The engine restricts LAN access to its paired Studio.
+polkit.addRule(function(action, subject) {
+  if (subject.user == "pi" && action.id.indexOf("org.freedesktop.NetworkManager.") === 0) {
+    return polkit.Result.YES;
+  }
+});

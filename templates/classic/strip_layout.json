@@ -1,0 +1,23 @@
+{
+  "footer": {
+    "line1": {
+      "box": [30, 90, 540, 85],
+      "font_size": 64,
+      "min_font_size": 20,
+      "font": "title",
+      "bold": true
+    },
+    "line2": {
+      "box": [30, 185, 540, 60],
+      "font_size": 28,
+      "min_font_size": 14,
+      "font": "body"
+    },
+    "date": {
+      "box": [30, 310, 540, 45],
+      "font_size": 32,
+      "min_font_size": 14,
+      "font": "title"
+    }
+  }
+}

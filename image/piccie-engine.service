@@ -1,0 +1,32 @@
+[Unit]
+Description=Piccie Engine
+After=network.target data-fallback.service piccie-lockdown.service
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/data/app/current
+Environment=PICCIE_DATA_DIR=/data
+Environment=PICCIE_CONFIG_FILE=/data/local.json
+Environment=PICCIE_CAMERA=picamera
+# Restart Chromium if the kiosk page stops heartbeating (blank-screen self-heal).
+Environment=PICCIE_KIOSK_WATCHDOG=1
+Environment=PICCIE_PREVIEW_BOOST=0
+Environment=PICCIE_PREVIEW_FPS=10
+Environment=PICCIE_PREVIEW_WIDTH=640
+Environment=PICCIE_PREVIEW_HEIGHT=480
+Environment=PICCIE_PREVIEW_QUALITY=85
+Environment=PICCIE_FAST_RESIZE=1
+Environment=PICCIE_DISK_LOW_MB=500
+Environment=PICCIE_ONBOARDING=1
+Environment=PICCIE_ONBOARDING_DATA_DIR=/data
+# /data is the writable partition; the engine (User=pi) must own it to write
+# config.json + the SQLite DB. The first-boot chown can race the mount, so assert
+# it here as root before every start. '+' runs privileged despite User=pi.
+ExecStartPre=+/bin/sh -c 'chown pi:pi /data 2>/dev/null || true'
+ExecStart=/opt/piccie/venv/bin/python -m engine.main
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

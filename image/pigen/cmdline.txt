@@ -1,0 +1,1 @@
+usb-storage.quirks=174c:55aa:u console=serial0,115200 console=tty1 root=ROOTDEV rootfstype=ext4 fsck.repair=yes fsck.mode=auto rootwait

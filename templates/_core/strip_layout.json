@@ -1,0 +1,14 @@
+{
+  "print_label": "2 × 6″ photo strip (300 DPI)",
+  "strip_width": 600,
+  "strip_height": 1800,
+  "padding_top": 60,
+  "gap": 30,
+  "header_height": 0,
+  "footer_height": 480,
+  "photo_width": 600,
+  "photo_height": 400,
+  "edge_to_edge": true,
+  "photo_border": 0,
+  "photo_slots": [{}, {}, {}]
+}

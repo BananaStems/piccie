@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover" />
+  <meta name="description" content="Create a photo strip template on your phone" />
+  <title>Template Studio</title>
+  <link rel="stylesheet" href="/css/studio.css" />
+</head>
+<body>
+  <header class="studio-header">
+    <div class="studio-title"><span>Template Studio</span><h1 id="studio-name-display">Untitled template</h1></div>
+    <div class="studio-history" aria-label="Edit history">
+      <button id="undo-edit" type="button" aria-label="Undo" disabled>↶</button>
+      <button id="redo-edit" type="button" aria-label="Redo" disabled>↷</button>
+      <button class="studio-save" id="install-template" type="button">Save</button>
+    </div>
+  </header>
+  <main class="studio-main">
+    <section class="studio-workspace" aria-label="Template canvas">
+      <div class="canvas-toolbar" aria-label="Canvas view">
+        <div class="view-switcher">
+          <button class="is-active" id="view-footer" type="button">Footer</button>
+          <button id="view-full" type="button">Full strip</button>
+        </div>
+        <span>Pinch to zoom</span>
+      </div>
+      <div class="strip-stage" id="strip-stage">
+        <div class="strip-shell" id="strip-shell">
+          <div class="studio-strip" id="studio-strip">
+            <div class="photo-slot photo-one"><span>Photo 1</span></div>
+            <div class="photo-slot photo-two"><span>Photo 2</span></div>
+            <div class="photo-slot photo-three"><span>Photo 3</span></div>
+            <div class="overlay-guide"><span>Image overlay limit</span></div>
+            <div class="footer-guide"><span>Editable footer</span></div>
+            <div id="studio-layers"></div>
+          </div>
+        </div>
+      </div>
+      <nav class="studio-dock" aria-label="Template tools">
+        <button type="button" data-tool="text"><strong>T</strong><span>Text</span></button>
+        <label class="studio-upload"><strong>＋</strong><span>Image</span><input id="studio-image" type="file" accept="image/png,image/jpeg" /></label>
+        <button type="button" data-tool="shape"><strong>○</strong><span>Shape</span></button>
+        <button type="button" data-tool="design"><strong>◐</strong><span>Design</span></button>
+        <button type="button" data-tool="layers"><strong>▱</strong><span>Layers</span></button>
+      </nav>
+    </section>
+    <aside class="studio-sheet" id="studio-sheet" aria-labelledby="sheet-title">
+      <div class="sheet-grabber" aria-hidden="true"></div>
+      <header class="sheet-header">
+        <div><span id="sheet-kicker">Edit</span><h2 id="sheet-title">Element</h2></div>
+        <button id="close-sheet" type="button" aria-label="Close controls">×</button>
+      </header>
+      <div class="sheet-content" id="sheet-content"></div>
+    </aside>
+  </main>
+  <p class="studio-status" id="studio-status" role="status"></p>
+  <script type="module" src="/js/studio.js"></script>
+</body>
+</html>

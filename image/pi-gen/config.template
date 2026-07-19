@@ -1,0 +1,19 @@
+# Copy to your pi-gen checkout as "config" before building.
+# image/build-image.sh does this automatically.
+
+IMG_NAME='piccie'
+RELEASE='trixie'
+DEPLOY_ZIP=0
+LOCALE_DEFAULT='en_GB.UTF-8'
+TARGET_HOSTNAME='piccie'
+KEYBOARD_KEYMAP='us'
+TIMEZONE_DEFAULT='Australia/Melbourne'
+FIRST_USER_NAME='pi'
+# SSH password login is disabled. Give the local console an unguessable build-
+# specific password; remote administration uses the key entered during setup.
+FIRST_USER_PASS="$(openssl rand -hex 24)"
+DISABLE_FIRST_BOOT_USER_RENAME=1
+ENABLE_SSH=1
+ENABLE_CLOUD_INIT=0
+STAGE_LIST='stage0 stage1 stage2 stage2-piccie'
+ARM64=1

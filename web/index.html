@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+  <meta name="description" content="Piccie event photobooth" />
+  <title>Piccie</title>
+  <script>
+    if (new URLSearchParams(location.search).has("kiosk")) document.documentElement.classList.add("kiosk");
+  </script>
+  <link rel="stylesheet" href="/css/app.css" />
+</head>
+<body>
+  <div id="booth-frame" aria-label="Piccie display 1024 by 600">
+    <div id="grain" aria-hidden="true"></div>
+    <div id="flash-overlay" aria-hidden="true"></div>
+    <main id="app"></main>
+    <aside id="osk-panel" class="osk-panel" hidden aria-label="On-screen keyboard">
+      <div id="osk-keys" class="osk-keys"></div>
+    </aside>
+    <div id="corner-tap-zone" aria-hidden="true"></div>
+  </div>
+  <script>
+    /* Scale the fixed 1024x600 booth design up to fill the actual screen, so the
+       UI isn't tiny when X runs a larger-than-native resolution.
+       Dev: append ?panel to the URL to lock it to a native 1024x600 preview of
+       the physical 7" touchscreen (no DevTools needed). */
+    (function () {
+      var sim = new URLSearchParams(location.search).has("panel");
+      if (sim) document.documentElement.classList.add("sim-panel");
+      function fit() {
+        var byWindow = Math.min(window.innerWidth / 1024, window.innerHeight / 600);
+        var s = sim ? Math.min(1, byWindow) : byWindow;
+        document.documentElement.style.setProperty("--booth-scale", s);
+      }
+      fit();
+      window.addEventListener("resize", fit);
+      window.addEventListener("orientationchange", fit);
+    })();
+  </script>
+  <script type="module" src="/js/app.js"></script>
+</body>
+</html>

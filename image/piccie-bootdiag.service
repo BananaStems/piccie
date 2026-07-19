@@ -1,0 +1,14 @@
+[Unit]
+Description=Piccie boot diagnostics dump to the boot partition
+# Order after the things we want to inspect; do NOT reference multi-user.target
+# in After= (it is our WantedBy target) to avoid an ordering cycle.
+After=lightdm.service NetworkManager.service piccie-engine.service
+
+[Service]
+Type=oneshot
+# Let lightdm/NM/the engine settle before snapshotting.
+ExecStartPre=/bin/sleep 25
+ExecStart=/usr/local/bin/piccie-bootdiag
+
+[Install]
+WantedBy=multi-user.target

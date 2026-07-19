@@ -1,0 +1,4 @@
+-r requirements.txt
+opencv-python==4.13.0.92
+pytest==9.0.3
+httpx==0.28.1

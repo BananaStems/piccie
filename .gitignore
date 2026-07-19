@@ -1,0 +1,15 @@
+.superpowers/
+.venv/
+data/
+config/local.json
+config/piccie-provision.json
+__pycache__/
+*.pyc
+.pytest_cache/
+.pi-gen/
+deploy/
+.pi-gen/qemu-boot/
+.DS_Store
+.claude/
+node_modules/
+.wrangler/

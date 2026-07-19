@@ -1,0 +1,20 @@
+[Unit]
+Description=Ensure /data exists (degraded fallback if the real partition failed)
+DefaultDependencies=no
+# Run AFTER the real /data mount is attempted (data.mount), so we only fall back
+# to tmpfs if the real partition genuinely failed — not in a race before the
+# slow USB adapter presents it.
+After=local-fs.target data.mount
+Before=piccie-firstboot-datapart.service piccie-engine.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# If /data isn't mounted, fall back to tmpfs and mark it degraded. Then rw-test
+# the mount: on success clear any stale /run marker; on failure (e.g. ext4 hit an
+# error and remounted read-only, where .DEGRADED itself can't be written) record
+# the marker on tmpfs at /run/piccie.degraded, which the engine also checks.
+ExecStart=/bin/sh -c 'mountpoint -q /data || { mount -t tmpfs -o size=256m,mode=0755 tmpfs /data; touch /data/.DEGRADED; }; if touch /data/.rwtest 2>/dev/null; then rm -f /data/.rwtest; rm -f /run/piccie.degraded; else touch /data/.DEGRADED 2>/dev/null || true; touch /run/piccie.degraded; fi'
+
+[Install]
+WantedBy=multi-user.target

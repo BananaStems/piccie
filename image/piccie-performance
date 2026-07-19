@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+# Apply Piccie's fixed, device-specific performance profile and reboot.
+set -euo pipefail
+
+DEVICE="${1:-}"
+MODE="${2:-}"
+CONFIG=/boot/firmware/config.txt
+BEGIN="# BEGIN PICCIE PERFORMANCE"
+END="# END PICCIE PERFORMANCE"
+
+[[ "${DEVICE}" == "pi4" || "${DEVICE}" == "pi5" ]] || { echo "unsupported device" >&2; exit 2; }
+[[ "${MODE}" == "standard" || "${MODE}" == "performance" ]] || { echo "unsupported mode" >&2; exit 2; }
+[[ -f "${CONFIG}" ]] || { echo "boot configuration not found" >&2; exit 3; }
+
+MODEL="$(tr -d '\0' </proc/device-tree/model 2>/dev/null || true)"
+case "${DEVICE}:${MODEL}" in
+  pi4:*"Raspberry Pi 4 Model B"*) ;;
+  pi5:*"Raspberry Pi 5"*) ;;
+  *) echo "selected device does not match detected hardware" >&2; exit 4 ;;
+esac
+
+if [[ "${MODE}" == "performance" && "${DEVICE}" != "pi4" ]]; then
+  echo "performance mode is not validated for this device" >&2
+  exit 5
+fi
+
+TMP="$(mktemp "${CONFIG}.piccie.XXXXXX")"
+trap 'rm -f -- "${TMP}"' EXIT
+awk -v begin="${BEGIN}" -v end="${END}" '
+  $0 == begin { managed=1; next }
+  $0 == end { managed=0; next }
+  !managed { print }
+' "${CONFIG}" >"${TMP}"
+
+if [[ "${MODE}" == "performance" ]]; then
+  cat >>"${TMP}" <<'EOF'
+
+# BEGIN PICCIE PERFORMANCE
+# Firmware-supported boost for compatible Raspberry Pi 4 revisions.
+[pi4]
+arm_boost=1
+[all]
+# END PICCIE PERFORMANCE
+EOF
+fi
+
+cp -n -- "${CONFIG}" "${CONFIG}.piccie-original" || true
+cat "${TMP}" >"${CONFIG}"
+sync "${CONFIG}"
+systemd-run --quiet --on-active=3s /usr/bin/systemctl reboot

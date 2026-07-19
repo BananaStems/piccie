@@ -1,0 +1,54 @@
+# For more options and information see
+# http://rptl.io/configtxt
+# Some settings may impact device functionality. See link above for details
+
+# Uncomment some or all of these to enable the optional hardware interfaces
+#dtparam=i2c_arm=on
+#dtparam=i2s=on
+#dtparam=spi=on
+
+# Enable audio (loads snd_bcm2835)
+dtparam=audio=on
+
+# Additional overlays and parameters are documented
+# /boot/firmware/overlays/README
+
+# Camera: firmware auto-detect did not find the IMX708 (Camera Module 3) on this
+# unit, so disable auto-detect and load the sensor overlay explicitly.
+camera_auto_detect=0
+dtoverlay=imx708
+
+# Automatically load overlays for detected DSI displays
+display_auto_detect=1
+
+# Automatically load initramfs files, if found
+auto_initramfs=1
+
+# Enable DRM VC4 V3D driver. noaudio: the 1024x600 panel has no audio sink, so
+# the HDMI audio codec otherwise spams "Unknown ELD version 0".
+dtoverlay=vc4-kms-v3d,noaudio
+max_framebuffers=2
+
+# Don't have the firmware create an initial video= setting in cmdline.txt.
+# Use the kernel's default instead.
+disable_fw_kms_setup=1
+
+# Run in 64-bit mode
+arm_64bit=1
+
+# Disable compensation for displays with overscan
+disable_overscan=1
+
+[cm4]
+# Enable host mode on the 2711 built-in XHCI USB controller.
+# This line should be removed if the legacy DWC2 controller is required
+# (e.g. for USB device mode) or if USB support is not required.
+otg_mode=1
+
+[cm5]
+dtoverlay=dwc2,dr_mode=host
+
+[all]
+# Hardware watchdog (bcm2835_wdt) so a hung boot/GUI auto-reboots instead of
+# sitting dead. Paired with systemd RuntimeWatchdogSec (see watchdog.conf).
+dtparam=watchdog=on

@@ -1,0 +1,37 @@
+{
+  "placeholder_color": "#d9d9d9",
+  "footer": {
+    "padding_x": 60,
+    "heart": {
+      "asset": "assets/heart.png",
+      "box": [278, -27, 44, 55],
+      "fit": "contain",
+      "stroke": "#ffffff",
+      "stroke_width": 2
+    },
+    "line1": {
+      "box": [130, 71],
+      "fill_width": true,
+      "max_font_size": 120,
+      "min_font_size": 24,
+      "font": "title",
+      "bold": false,
+      "uppercase": true
+    },
+    "line2": {
+      "box": [191, 70],
+      "fill_width": true,
+      "fit_width_only": true,
+      "max_font_size": 70,
+      "min_font_size": 20,
+      "font": "line2",
+      "lowercase": true
+    },
+    "date": {
+      "box": [244, 398, 113, 22],
+      "font_size": 31,
+      "min_font_size": 14,
+      "font": "title"
+    }
+  }
+}

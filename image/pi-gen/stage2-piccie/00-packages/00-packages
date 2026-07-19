@@ -1,0 +1,16 @@
+xserver-xorg
+xserver-xorg-input-libinput
+x11-xserver-utils
+xinit
+lightdm
+openbox
+dbus-x11
+chromium
+rpi-chromium-mods
+python3-venv
+python3-pip
+python3-picamera2
+python3-libcamera
+rsync
+curl
+avahi-daemon

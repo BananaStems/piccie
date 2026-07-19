@@ -1,0 +1,23 @@
+{
+  "name": "Love",
+  "description": "White strip with burgundy serif and script branding",
+  "default": true,
+  "sort_order": 0,
+  "colors": {
+    "idle_background": "#ffffff",
+    "idle_text": "#790014",
+    "idle_subtext": "#9a3347",
+    "accent": "#790014",
+    "countdown_text": "#790014",
+    "countdown_ring": "#790014",
+    "strip_background": "#ffffff",
+    "strip_text": "#790014",
+    "photo_border": "#ffffff",
+    "photo_separator": "#ffffff"
+  },
+  "fonts": {
+    "title": "bodoni72",
+    "line2": "cursive",
+    "date": "bodoni72"
+  }
+}

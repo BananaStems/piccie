@@ -1,0 +1,22 @@
+{
+  "name": "Classic",
+  "description": "Warm cream tones with gold accents — timeless wedding style",
+  "colors": {
+    "idle_background": "#f2ebe3",
+    "idle_text": "#2d2926",
+    "idle_subtext": "#7a7268",
+    "accent": "#c97b4a",
+    "countdown_text": "#2d2926",
+    "countdown_ring": "#c97b4a",
+    "strip_background": "#ffffff",
+    "strip_text": "#2d2926",
+    "photo_border": "#ffffff",
+    "photo_separator": "#ffffff"
+  },
+  "fonts": {
+    "title": "serif",
+    "line2": "sans",
+    "date": "serif",
+    "body": "sans"
+  }
+}
