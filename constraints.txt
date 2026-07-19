@@ -1,7 +1,7 @@
 annotated-doc==0.0.4
 annotated-types==0.7.0
 anyio==4.14.2
-botocore==1.43.24
+botocore==1.43.51
 click==8.4.2
 h11==0.16.0
 idna==3.18
@@ -9,7 +9,7 @@ jmespath==1.1.0
 pydantic==2.13.4
 pydantic-core==2.46.4
 python-dateutil==2.9.0.post0
-s3transfer==0.18.0
+s3transfer==0.19.0
 six==1.17.0
 starlette==1.2.1
 typing-extensions==4.15.0
