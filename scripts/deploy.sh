@@ -18,8 +18,8 @@ cleanup() { rm -rf -- "${STAGE}" "${ARCHIVE_DIR}"; }
 trap cleanup EXIT
 
 mkdir -p "${STAGE}"
-rsync -a engine web templates scripts requirements.txt constraints.txt README.md "${STAGE}/"
-printf '%s\n' "${RELEASE_ID}" > "${STAGE}/VERSION"
+rsync -a engine web templates scripts requirements.txt constraints.txt README.md VERSION "${STAGE}/"
+printf '%s\n' "${RELEASE_ID}" > "${STAGE}/BUILD"
 tar -C "${STAGE}" -czf "${ARCHIVE}" .
 
 ssh "${HOST}" 'mkdir -p /data/app/incoming'

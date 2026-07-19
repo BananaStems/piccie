@@ -176,6 +176,12 @@ export async function renderSettingsScreen({ app, state, render, api, escapeHtml
         <p class="performance-status" id="performance-status"></p>
         <button type="button" class="btn performance-apply" id="performance-apply">Apply & restart</button>
       </div>`;
+  const appVersion = escapeHtml(state.status?.version || "Unknown");
+  const buildId = escapeHtml(state.status?.build || "Unknown");
+  const versionPanel = `<div class="version-panel">
+    <div class="version-release"><span>Piccie</span><strong>v${appVersion}</strong></div>
+    <span class="version-build">Build ${buildId}</span>
+  </div>`;
   const groups = [
     group("Photo", [
       lookCards(settings.filter_name),
@@ -190,6 +196,7 @@ export async function renderSettingsScreen({ app, state, render, api, escapeHtml
       slider({ id: "set-lens", label: "Manual focus", key: "lens_position", value: settings.lens_position, min: 0, max: 10, step: 0.1, rowId: "row-lens", hidden: settings.af_continuous }),
     ]),
     group("System performance", [performancePanel]),
+    group("About", [versionPanel]),
   ];
 
   app.innerHTML = `

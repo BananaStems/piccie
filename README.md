@@ -5,6 +5,7 @@
 <p align="center"><strong>Make the booth &amp; the memories</strong></p>
 
 [![CI](https://github.com/BananaStems/piccie/actions/workflows/ci.yml/badge.svg)](https://github.com/BananaStems/piccie/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/BananaStems/piccie?display_name=tag&sort=semver)](https://github.com/BananaStems/piccie/releases/latest)
 [![MIT License](https://img.shields.io/badge/license-MIT-29231e.svg)](LICENSE)
 [![Raspberry Pi](https://img.shields.io/badge/Raspberry%20Pi-4%20Model%20B-c45c4a.svg)](docs/hardware.md)
 

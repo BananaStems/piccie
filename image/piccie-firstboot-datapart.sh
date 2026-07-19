@@ -37,8 +37,9 @@ if [ ! -e /data/app/current ]; then
     /opt/piccie/requirements.txt \
     /opt/piccie/constraints.txt \
     /opt/piccie/README.md \
+    /opt/piccie/VERSION \
+    /opt/piccie/BUILD \
     /data/app/releases/factory/
-  printf 'factory\n' > /data/app/releases/factory/VERSION
   chown -R pi:pi /data/app
   ln -s /data/app/releases/factory /data/app/current.next
   mv -Tf /data/app/current.next /data/app/current

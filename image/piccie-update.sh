@@ -39,7 +39,7 @@ with tarfile.open(archive, "r:gz") as bundle:
     bundle.extractall(root)
 PY
 
-for required in engine web templates scripts requirements.txt constraints.txt VERSION; do
+for required in engine web templates scripts requirements.txt constraints.txt VERSION BUILD; do
   [[ -e "${TMP}/${required}" ]] || { echo "release missing ${required}" >&2; exit 2; }
 done
 

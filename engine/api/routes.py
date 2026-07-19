@@ -53,6 +53,7 @@ from engine.templates import TemplateRegistry
 from engine.template_packages import GOOGLE_FONTS, install_template
 from engine.storage import data_degraded, disk_free_mb, disk_low
 from engine.upload_queue import UploadJob
+from engine.version import APP_VERSION, BUILD_ID
 
 router = APIRouter(prefix="/api")
 
@@ -99,6 +100,8 @@ def status(request: Request) -> StatusResponse:
         config = store.set_active_event(None)
     camera = request.app.state.camera
     return StatusResponse(
+        version=APP_VERSION,
+        build=BUILD_ID,
         camera_available=camera.available,
         wifi_ssid=current_ssid(),
         active_event_id=config.active_event_id,

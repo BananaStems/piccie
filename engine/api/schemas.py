@@ -7,6 +7,8 @@ from pydantic import BaseModel, Field, HttpUrl, field_validator, model_validator
 
 
 class StatusResponse(BaseModel):
+    version: str
+    build: str
     camera_available: bool
     wifi_ssid: str | None = None
     disk_free_mb: int = 0

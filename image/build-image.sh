@@ -73,10 +73,13 @@ rsync -a \
   "${REPO_ROOT}/scripts" \
   "${REPO_ROOT}/requirements.txt" \
   "${REPO_ROOT}/constraints.txt" \
+  "${REPO_ROOT}/VERSION" \
   "${REPO_ROOT}/README.md" \
   "${REPO_ROOT}/LICENSE" \
   "${REPO_ROOT}/THIRD_PARTY_NOTICES.md" \
   "${PI_GEN_DIR}/piccie-src/"
+printf '%s\n' "$(git -C "${REPO_ROOT}" rev-parse --short HEAD 2>/dev/null || echo image)" \
+  > "${PI_GEN_DIR}/piccie-src/BUILD"
 install -m 644 "${REPO_ROOT}/config/local.example.json" \
   "${PI_GEN_DIR}/piccie-src/config/local.example.json"
 
