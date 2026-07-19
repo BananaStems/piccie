@@ -1,12 +1,14 @@
-# Piccie
+<p align="center">
+  <img src="web/assets/piccie-wordmark.svg" alt="piccie" width="220">
+</p>
 
-**An open-source Raspberry Pi photobooth you can 3D print, build and own.**
+<p align="center"><strong>Make the booth &amp; the memories</strong></p>
 
 [![CI](https://github.com/BananaStems/piccie/actions/workflows/ci.yml/badge.svg)](https://github.com/BananaStems/piccie/actions/workflows/ci.yml)
 [![MIT License](https://img.shields.io/badge/license-MIT-29231e.svg)](LICENSE)
 [![Raspberry Pi](https://img.shields.io/badge/Raspberry%20Pi-4%20Model%20B-c45c4a.svg)](docs/hardware.md)
 
-![Piccie — Print the booth. Make the memories.](docs/images/piccie-hero.jpg)
+![Piccie — Make the booth & the memories](docs/images/piccie-hero.jpg)
 
 Piccie combines a Raspberry Pi, touchscreen, camera and printed enclosure into
 a self-contained photobooth. Guests take three photos and scan a QR code to

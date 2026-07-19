@@ -6,5 +6,11 @@ The kiosk UI bundles the Outfit font. Copyright 2021 The Outfit Project Authors.
 It is licensed under the SIL Open Font License 1.1; the full license is in
 `web/fonts/OFL.txt`.
 
+## Instrument Serif
+
+The Piccie wordmark uses Instrument Serif by Instrument Type, converted to
+vector outlines for consistent offline rendering. Instrument Serif is licensed
+under the SIL Open Font License 1.1.
+
 Raspberry Pi OS, Chromium, Cloudflare R2 client libraries, Pillow, FastAPI and
 other installed dependencies retain their respective licenses.

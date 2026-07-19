@@ -967,9 +967,9 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 }
 
 .onboarding-brand {
-  font-size: var(--font-md);
-  font-weight: var(--weight-semibold);
-  letter-spacing: -0.02em;
+  display: block;
+  width: 84px;
+  height: auto;
 }
 
 .onboarding-step {

@@ -6,7 +6,7 @@ export function renderOnboardingScreen({ app, state, render, api, escapeHtml, lo
     app.innerHTML = `
       <div class="screen onboarding-screen">
         <header class="onboarding-header">
-          <span class="onboarding-brand">Piccie</span>
+          <img class="onboarding-brand" src="/assets/piccie-wordmark.svg" alt="piccie" />
           <span class="onboarding-step">Step ${stepNumber} of 3</span>
         </header>
         <main class="onboarding-main">
