@@ -2,7 +2,7 @@ annotated-doc==0.0.4
 annotated-types==0.7.0
 anyio==4.13.0
 botocore==1.43.24
-click==8.4.1
+click==8.4.2
 h11==0.16.0
 idna==3.18
 jmespath==1.1.0
