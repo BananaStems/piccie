@@ -25,7 +25,7 @@ inside the enclosure.
 | 1 | Pi 4 heatsink and fan | [Reference part](https://www.aliexpress.com/item/1005007209436358.html) | Active cooling is strongly recommended |
 | 1 | IMX708 camera, 75° NoIR | [Reference part](https://www.aliexpress.com/item/1005010149719151.html) | Select the 75° NoIR variant |
 | 1 | 10-inch LED ring light | [Reference part](https://www.aliexpress.com/item/1005002504336987.html) | Donor light; its supplied diffuser is replaced |
-| 1 | 10-inch HDMI touchscreen | [Reference part](https://www.aliexpress.com/item/1005009096258871.html) | Touch support is required; reference resolution is 1024×600 |
+| 1 | 7-inch HDMI touchscreen | [Reference part](https://www.aliexpress.com/item/1005009096258871.html) | Touch support is required; reference resolution is 1024×600 |
 | TBD | Heat-set threaded inserts | [Reference set](https://www.amazon.com.au/dp/B0G423B5BD) | Exact sizes and quantities are still being recorded |
 | TBD | Threaded standoffs, screws and nuts | Often supplied with the hardware | Exact sizes and quantities are still being recorded |
 | As required | PETG filament | Any suitable supplier | Opaque for the body; clear or white for the diffuser |
