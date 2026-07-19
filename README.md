@@ -21,12 +21,11 @@ to your Cloudflare R2 account.
 
 ## Get started
 
-You need to build the Piccie operating-system image before the booth can run.
 Choose the guide you need:
 
-1. **[Set up the software](docs/software-setup.md)** — build the image on macOS,
-   Linux or Windows, flash the microSD card, complete first boot and run the
-   reliability test.
+1. **[Set up the software](docs/software-setup.md)** — download the ready-made
+   image, or build it yourself on macOS, Linux or Windows. Then flash the
+   microSD card, complete first boot and run the reliability test.
 2. **[Build the hardware](docs/hardware.md)** — see the current parts list and
    printed components. STL files and full assembly instructions are coming
    soon.

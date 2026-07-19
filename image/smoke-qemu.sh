@@ -56,7 +56,8 @@ boot_failed() {
 
 reboot_loop() {
   local boots
-  boots="$(grep -c "Booting Linux on physical CPU" "${LOG}" 2>/dev/null || echo 0)"
+  boots="$(grep -c "Booting Linux on physical CPU" "${LOG}" 2>/dev/null || true)"
+  boots="${boots:-0}"
   [[ "${boots}" -ge 4 ]] && ! boot_ok
 }
 

@@ -1,9 +1,9 @@
 # Software setup
 
-This guide takes Piccie from source code to a working Raspberry Pi. The main
+This guide takes Piccie from a download to a working Raspberry Pi. The main
 steps are:
 
-1. Build the Piccie image on another computer.
+1. Download the Piccie image, or build it yourself.
 2. Flash the image to a microSD card.
 3. Start the Raspberry Pi and complete onboarding.
 4. Test the booth, then run the soak test before using it at an event.
@@ -11,8 +11,6 @@ steps are:
 ## What you need
 
 - A macOS, Linux or Windows computer
-- Git
-- Docker with at least 20 GB of free disk space
 - A microSD card reader
 - [Raspberry Pi Imager](https://www.raspberrypi.com/software/)
 - A genuine **32 GB high-endurance microSD card rated A2/U3**
@@ -23,7 +21,22 @@ A high-endurance card is recommended because the booth runs for long periods
 and writes photos throughout an event. The current image reserves a fixed 8 GB
 data partition, so a larger card does not currently provide more photo storage.
 
-## 1. Build the image
+## 1. Get the image
+
+### Download the ready-made image
+
+Open the [latest Piccie release](https://github.com/BananaStems/piccie/releases/latest)
+and download the file ending in `-arm64.img.xz`. You do not need to extract it;
+Raspberry Pi Imager can flash the compressed file directly.
+
+Each release also includes a `.sha256` file. You can use it to verify that the
+download is complete and unchanged before flashing.
+
+### Build it yourself
+
+Building from source requires Git, Docker and at least 20 GB of free disk
+space. It is useful if you want to inspect or change everything included in the
+image.
 
 On macOS or Linux, clone the repository before following the platform steps:
 
@@ -122,8 +135,9 @@ To continue a failed full build without starting again:
 1. Install and open [Raspberry Pi Imager](https://www.raspberrypi.com/software/).
 2. Insert the microSD card into your computer.
 3. Select **Raspberry Pi 4** as the device.
-4. Under the operating-system choice, select **Use custom** and choose the
-   generated `piccie.img` file from `.pi-gen/deploy/`.
+4. Under the operating-system choice, select **Use custom** and choose either
+   the downloaded `.img.xz` file or the generated `piccie.img` file from
+   `.pi-gen/deploy/`.
 5. Select the microSD card as the storage target.
 6. Select **Next**, skip Raspberry Pi OS customisation if it is offered, and
    write the image.
