@@ -67,7 +67,11 @@ export const api = {
   deleteTemplate: (id) => request(`/templates/${id}`, { method: "DELETE" }),
   listWifiNetworks: () => request("/wifi/networks"),
   connectWifi: (ssid, password, hidden = false) =>
-    request("/wifi/connect", { method: "POST", body: JSON.stringify({ ssid, password, hidden }) }),
+    request("/wifi/connect", {
+      method: "POST",
+      body: JSON.stringify({ ssid, password, hidden }),
+      timeoutMs: 45000,
+    }),
   completeOnboarding: (data) =>
     request("/onboarding/complete", {
       method: "POST",

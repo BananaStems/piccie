@@ -42,7 +42,8 @@ export function renderOnboardingScreen({ app, state, render, api, escapeHtml, lo
               autocomplete="off" placeholder="Wi-Fi password" aria-label="Wi-Fi password" />
             <button class="btn btn-secondary password-toggle" type="button" id="onboarding-password-toggle">Show</button>
           </div>
-          <p class="wifi-msg" id="onboarding-wifi-message" role="status"></p>
+          <p class="wifi-msg onboarding-wifi-message" id="onboarding-wifi-message"
+            role="status" aria-live="polite"></p>
           <div class="form-actions">
             <button class="btn btn-secondary" type="button" id="onboarding-wifi-cancel">Cancel</button>
             <button class="btn" type="button" id="onboarding-wifi-connect">Connect</button>
@@ -109,19 +110,32 @@ export function renderOnboardingScreen({ app, state, render, api, escapeHtml, lo
       if (!state.wifiSelected) return;
       const button = document.getElementById("onboarding-wifi-connect");
       const message = document.getElementById("onboarding-wifi-message");
-      button.disabled = true;
-      message.className = "wifi-msg";
-      message.textContent = `Connecting to ${state.wifiSelected}…`;
-      try {
-        await api.connectWifi(state.wifiSelected, password.value || null);
-        state.status = await api.status();
+      const selected = state.wifiNetworks.find((network) => network.ssid === state.wifiSelected);
+      if (selected?.connected) {
         closeOnScreenKeyboard();
         state.onboardingStep = "providers";
         render();
+        return;
+      }
+      button.disabled = true;
+      button.setAttribute("aria-busy", "true");
+      message.className = "wifi-msg onboarding-wifi-message";
+      message.setAttribute("role", "status");
+      message.textContent = `Connecting to ${state.wifiSelected}…`;
+      closeOnScreenKeyboard();
+      try {
+        await api.connectWifi(state.wifiSelected, password.value || null);
+        state.status = await api.status();
+        state.onboardingStep = "providers";
+        render();
       } catch (error) {
-        message.className = "wifi-msg error";
+        message.className = "wifi-msg onboarding-wifi-message error";
+        message.setAttribute("role", "alert");
         message.textContent = error.message;
         button.disabled = false;
+        button.removeAttribute("aria-busy");
+        password.focus();
+        password.select();
       }
     };
     loadNetworks();

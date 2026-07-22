@@ -55,7 +55,7 @@ def client(tmp_path, monkeypatch):
 def test_operator_auth_event_and_capture_flow(client):
     test_client, app = client
     status = test_client.get("/api/status").json()
-    assert status["version"] == "1.0.0"
+    assert status["version"] == "1.0.1"
     assert status["build"]
     app.state.config_store.set_admin_pin("2468")
     event_body = {

@@ -178,6 +178,10 @@ function tapKeepsKeyboard(target) {
   if (panelEl.contains(target)) return true;
   if (target === activeInput) return true;
   if (target.closest(".password-toggle")) return true;
+  // These controls move when the keyboard closes. Keep the keyboard open until
+  // their click handler runs; otherwise pointer-down moves the button before
+  // pointer-up and Chromium drops the click entirely.
+  if (target.closest(".onboarding-wifi-form .form-actions, .wifi-connect .form-actions")) return true;
   if (isEditableInput(target)) return true;
   return false;
 }

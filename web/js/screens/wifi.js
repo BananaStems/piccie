@@ -63,12 +63,12 @@ export function renderWifiScreen({ app, state, api, escapeHtml, closeOnScreenKey
     message.className = "wifi-msg";
     message.textContent = `Connecting to ${ssid}...`;
     button.disabled = true;
+    closeOnScreenKeyboard();
     try {
       await api.connectWifi(ssid, password || null);
       state.status = await api.status();
       message.className = "wifi-msg success";
       message.textContent = `Connected to ${ssid}.`;
-      closeOnScreenKeyboard();
       setTimeout(() => {
         returnFromWifi();
       }, 900);
@@ -76,6 +76,8 @@ export function renderWifiScreen({ app, state, api, escapeHtml, closeOnScreenKey
       message.className = "wifi-msg error";
       message.textContent = error.message;
       button.disabled = false;
+      document.getElementById("wifi-pw").focus();
+      document.getElementById("wifi-pw").select();
     }
   };
 

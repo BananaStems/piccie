@@ -1288,7 +1288,7 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 }
 
 #booth-frame.osk-open .onboarding-wifi-form {
-  bottom: calc(var(--osk-height) - 72px);
+  bottom: calc(var(--osk-height) + var(--space-2));
 }
 
 .wifi-list {
@@ -1435,6 +1435,17 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 
 .wifi-msg.error { color: var(--danger); }
 .wifi-msg.success { color: var(--accent); }
+
+.onboarding-wifi-message.error {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  padding: var(--space-3);
+  border: 1px solid rgba(196, 77, 98, 0.34);
+  border-radius: var(--radius-sm);
+  background: rgba(196, 77, 98, 0.1);
+  font-weight: var(--weight-semibold);
+}
 
 .admin-section-title {
   min-width: 0;

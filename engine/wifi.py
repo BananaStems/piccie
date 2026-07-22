@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import platform
 import re
+import secrets
 import subprocess
 from dataclasses import dataclass
 
@@ -64,9 +65,32 @@ def _current_ssid_mac() -> str | None:
 def _current_ssid_linux() -> str | None:
     out = _run(["nmcli", "-t", "-f", "active,ssid", "dev", "wifi"])
     for line in out.splitlines():
-        if line.startswith("yes:"):
-            return line.split(":", 1)[1] or None
+        fields = _nmcli_fields(line)
+        if len(fields) >= 2 and fields[0] == "yes":
+            return fields[1] or None
     return None
+
+
+def _nmcli_fields(line: str) -> list[str]:
+    """Split terse nmcli output without breaking escaped ':' in an SSID."""
+    fields: list[str] = []
+    field: list[str] = []
+    escaped = False
+    for char in line:
+        if escaped:
+            field.append(char)
+            escaped = False
+        elif char == "\\":
+            escaped = True
+        elif char == ":":
+            fields.append("".join(field))
+            field = []
+        else:
+            field.append(char)
+    if escaped:
+        field.append("\\")
+    fields.append("".join(field))
+    return fields
 
 
 def _scan_ssids_mac() -> list[str]:
@@ -107,9 +131,10 @@ def _networks_linux() -> list[WifiNetwork]:
     seen: set[str] = set()
     networks: list[WifiNetwork] = []
     for line in scan_out.splitlines():
-        if not line or ":" not in line:
+        fields = _nmcli_fields(line)
+        if len(fields) < 2:
             continue
-        ssid, _, signal_raw = line.partition(":")
+        ssid, signal_raw = fields[:2]
         if not ssid or ssid in seen:
             continue
         seen.add(ssid)
@@ -168,7 +193,18 @@ def current_ssid() -> str | None:
     return fallback[0].ssid if fallback else None
 
 
-def _nmcli_error(output: str) -> str:
+def _nmcli_error(output: str, code: int) -> str:
+    lowered = output.lower()
+    if code == 124 or "timed out" in lowered:
+        return "The connection timed out. Move the booth closer to the router and try again."
+    if any(text in lowered for text in ("secrets were required", "invalid password", "wrong password", "no secrets")):
+        return "Incorrect Wi-Fi password. Check it and try again."
+    if "no network with ssid" in lowered or "not found" in lowered:
+        return "That Wi-Fi network is no longer available. Refresh the list and try again."
+    if "not authorized" in lowered or "permission" in lowered:
+        return "Piccie could not control the Wi-Fi radio. Restart the booth and try again."
+    if "networking disabled" in lowered or "wi-fi is disabled" in lowered:
+        return "Wi-Fi is switched off. Restart the booth and try again."
     for line in reversed(output.splitlines()):
         line = line.strip()
         if line:
@@ -190,18 +226,29 @@ def connect_network(ssid: str, password: str | None = None, hidden: bool = False
     if platform.system() != "Linux" or dev_mode:
         return WifiResult(ok=True, ssid=ssid)
 
-    cmd = ["nmcli", "device", "wifi", "connect", ssid]
+    radio_code, radio_output = _run_status(["nmcli", "radio", "wifi", "on"], timeout=8)
+    if radio_code != 0:
+        return WifiResult(ok=False, ssid=ssid, error=_nmcli_error(radio_output, radio_code))
+
+    # Always use a fresh profile. NetworkManager may otherwise reuse a profile
+    # created by an earlier failed attempt and silently retry its stale password.
+    profile_name = f"piccie-wifi-{secrets.token_hex(6)}"
+    cmd = ["nmcli", "--wait", "30", "device", "wifi", "connect", ssid]
     if password:
         cmd += ["password", password]
     if hidden:
         cmd += ["hidden", "yes"]
+    cmd += ["name", profile_name]
     code, output = _run_status(cmd, timeout=35)
     if code != 0:
-        return WifiResult(ok=False, ssid=ssid, error=_nmcli_error(output))
+        # Some failed activations leave a saved profile behind. Remove only the
+        # disposable profile from this attempt so the next password starts clean.
+        _run_status(["nmcli", "connection", "delete", "id", profile_name], timeout=8)
+        return WifiResult(ok=False, ssid=ssid, error=_nmcli_error(output, code))
     # Prefer the just-joined network on the next reboot. The provisioned profile is
     # left at the default autoconnect-priority (0); bumping the runtime profile above
     # it means moving between venues sticks to the latest manual choice, and among
     # several manual profiles NetworkManager tie-breaks equal priority by most-recently
-    # active. nmcli names the profile after the SSID; best-effort, non-fatal if missed.
-    _run_status(["nmcli", "connection", "modify", ssid, "connection.autoconnect-priority", "10"], timeout=8)
+    # active. Best-effort, non-fatal if this cosmetic preference cannot be saved.
+    _run_status(["nmcli", "connection", "modify", "id", profile_name, "connection.autoconnect-priority", "10"], timeout=8)
     return WifiResult(ok=True, ssid=ssid)
