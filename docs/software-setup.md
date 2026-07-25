@@ -18,8 +18,9 @@ steps are:
   camera connected for testing
 
 A high-endurance card is recommended because the booth runs for long periods
-and writes photos throughout an event. The current image reserves a fixed 8 GB
-data partition, so a larger card does not currently provide more photo storage.
+and writes photos throughout an event. The image starts with an 8 GB data
+partition, then automatically expands it to use the remaining card capacity
+during the first startup. Boot and system partitions stay fixed in size.
 
 ## 1. Get the image
 
@@ -148,7 +149,9 @@ Writing the image erases the selected card. Check the storage target carefully.
 ## 3. Complete first boot
 
 Before powering on, connect the touchscreen, camera, active cooling and a
-reliable Raspberry Pi power supply.
+reliable Raspberry Pi power supply. On the first power-on, Piccie expands the
+data partition and automatically restarts once before showing setup. Do not
+remove power or the card during that restart.
 
 1. Insert the flashed microSD card and power on the booth.
 2. Choose the Wi-Fi network used for initial setup.

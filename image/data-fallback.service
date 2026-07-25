@@ -4,7 +4,7 @@ DefaultDependencies=no
 # Run AFTER the real /data mount is attempted (data.mount), so we only fall back
 # to tmpfs if the real partition genuinely failed — not in a race before the
 # slow USB adapter presents it.
-After=local-fs.target data.mount
+After=piccie-grow-data.service local-fs.target data.mount
 Before=piccie-firstboot-datapart.service piccie-engine.service
 
 [Service]
@@ -14,7 +14,9 @@ RemainAfterExit=yes
 # the mount: on success clear any stale /run marker; on failure (e.g. ext4 hit an
 # error and remounted read-only, where .DEGRADED itself can't be written) record
 # the marker on tmpfs at /run/piccie.degraded, which the engine also checks.
-ExecStart=/bin/sh -c 'mountpoint -q /data || { mount -t tmpfs -o size=256m,mode=0755 tmpfs /data; touch /data/.DEGRADED; }; if touch /data/.rwtest 2>/dev/null; then rm -f /data/.rwtest; rm -f /run/piccie.degraded; else touch /data/.DEGRADED 2>/dev/null || true; touch /run/piccie.degraded; fi'
+# A grow failure blocks normal disk-backed startup, but must not block this
+# service's degraded/tmpfs path.
+ExecStart=/bin/sh -c 'mountpoint -q /data || { mount -t tmpfs -o size=256m,mode=0755 tmpfs /data; touch /data/.DEGRADED; }; if touch /data/.rwtest 2>/dev/null; then rm -f /data/.rwtest; rm -f /run/piccie.degraded; else touch /data/.DEGRADED 2>/dev/null || true; touch /run/piccie.degraded; fi; if [ -e /run/piccie-data-grow.failed ] && [ ! -e /data/.DEGRADED ] && [ ! -e /run/piccie.degraded ]; then echo "data-fallback: data growth failed on a real disk mount; refusing normal startup."; exit 1; fi'
 
 [Install]
 WantedBy=multi-user.target

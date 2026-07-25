@@ -24,3 +24,4 @@ jobs:
       - run: node --check web/js/studio.js && node --check web/js/screens/templates.js && node --check web/js/screens/editor.js
       - run: node --test cloud/test/worker.test.js
       - run: bash -n image/*.sh scripts/*.sh
+      - run: bash image/test-grow-data.sh

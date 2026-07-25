@@ -1,6 +1,7 @@
 [Unit]
 Description=Piccie Engine
-After=network.target data-fallback.service piccie-lockdown.service
+Requires=data-fallback.service
+After=network.target piccie-grow-data.service data-fallback.service piccie-firstboot-datapart.service piccie-lockdown.service
 
 [Service]
 Type=simple

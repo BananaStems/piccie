@@ -17,7 +17,7 @@ Usage: ./image/test-appliance.sh [--skip-build] [--incremental]
   --skip-build    Only run QEMU boot check on an existing image
   --incremental   Fast rebuild before boot (requires prior full build)
 
-Runs a fast boot-only QEMU check (systemd up), not a full SSH/API test.
+Runs the QEMU p3/ext4 growth and systemd boot check, not a full SSH/API test.
 Requires: Docker Desktop (running) and qemu-system-aarch64.
 EOF
       exit 0
@@ -46,8 +46,4 @@ if [[ "${SKIP_BUILD}" -eq 0 ]]; then
   "${REPO_ROOT}/image/build-image.sh" "${BUILD_ARGS[@]}"
 fi
 
-SMOKE_ARGS=()
-if [[ "${SKIP_BUILD}" -eq 1 ]]; then
-  SMOKE_ARGS+=(--skip-boot)
-fi
-exec "${REPO_ROOT}/image/smoke-qemu.sh" "${SMOKE_ARGS[@]}"
+exec "${REPO_ROOT}/image/smoke-qemu.sh"

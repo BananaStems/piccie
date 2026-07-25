@@ -74,12 +74,14 @@ fi
 
 QEMU_IMG="${REPO_ROOT}/.pi-gen/deploy/piccie-qemu.img"
 mkdir -p "$(dirname "${QEMU_IMG}")"
-if [[ ! -f "${QEMU_IMG}" || "${IMG}" -nt "${QEMU_IMG}" ]]; then
+if [[ "${PICCIE_QEMU_FRESH:-0}" == "1" || ! -f "${QEMU_IMG}" || "${IMG}" -nt "${QEMU_IMG}" ]]; then
   cp "${IMG}" "${QEMU_IMG}"
 fi
+SOURCE_IMG_SIZE="$(qemu-img info --output=json "${IMG}" | python3 -c 'import json, sys; print(json.load(sys.stdin)["virtual-size"])')"
 QEMU_IMG_SIZE="$(qemu-img info --output=json "${QEMU_IMG}" | python3 -c 'import json, sys; print(json.load(sys.stdin)["virtual-size"])')"
-if (( QEMU_IMG_SIZE < 8 * 1024 * 1024 * 1024 )); then
-  qemu-img resize -f raw "${QEMU_IMG}" 8G >/dev/null
+QEMU_TARGET_SIZE=$((SOURCE_IMG_SIZE + 2 * 1024 * 1024 * 1024))
+if (( QEMU_IMG_SIZE < QEMU_TARGET_SIZE )); then
+  qemu-img resize -f raw "${QEMU_IMG}" "${QEMU_TARGET_SIZE}" >/dev/null
 fi
 
 DISPLAY_ARGS=(-display cocoa)

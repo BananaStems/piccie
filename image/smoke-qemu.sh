@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Fast QEMU smoke test: confirm the image boots to systemd (no SSH/API wait).
+# Fast QEMU smoke test: confirm p3 grows across one reboot and systemd comes up.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -25,7 +25,8 @@ for arg in "$@"; do
       cat <<'EOF'
 Usage: ./image/smoke-qemu.sh [--keep-running] [--skip-boot]
 
-Boots the Piccie image in QEMU and passes when systemd starts.
+Boots a fresh copy of the Piccie image with 2 GiB of extra virtual-card space.
+Passes after p3/ext4 growth, the controlled reboot, and systemd startup.
 Does not wait for SSH or the booth API (too slow/unreliable on Mac TCG).
 
   --keep-running  Leave QEMU running after a successful boot check
@@ -46,12 +47,12 @@ done
 trap cleanup EXIT
 
 boot_ok() {
-  grep -q "Hostname set to <piccie>" "${LOG}" 2>/dev/null \
-    || grep -q "Reached target multi-user.target" "${LOG}" 2>/dev/null
+  grep -q "piccie-grow-data: filesystem expansion verified" "${LOG}" 2>/dev/null \
+    && grep -q "Reached target multi-user.target" "${LOG}" 2>/dev/null
 }
 
 boot_failed() {
-  grep -qE "Kernel panic|VFS: Cannot open root device|Unable to mount root" "${LOG}" 2>/dev/null
+  grep -qE "Kernel panic|VFS: Cannot open root device|Unable to mount root|piccie-grow-data: ERROR:" "${LOG}" 2>/dev/null
 }
 
 reboot_loop() {
@@ -65,8 +66,8 @@ if [[ "${SKIP_BOOT}" -eq 0 ]]; then
   pkill -f "qemu-system-aarch64.*piccie-qemu" 2>/dev/null || true
   sleep 2
   LOG="$(mktemp)"
-  echo "Starting QEMU (boot-only check, timeout ${TIMEOUT}s)..."
-  PICCIE_QEMU_HEADLESS=1 PICCIE_QEMU_BACKGROUND=1 \
+  echo "Starting QEMU (data-growth boot check, timeout ${TIMEOUT}s)..."
+  PICCIE_QEMU_FRESH=1 PICCIE_QEMU_HEADLESS=1 PICCIE_QEMU_BACKGROUND=1 \
     "${REPO_ROOT}/image/run-qemu.sh" >"${LOG}" 2>&1 &
 else
   LOG="$(mktemp)"

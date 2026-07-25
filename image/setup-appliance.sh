@@ -30,8 +30,10 @@ install -m 644 "${INSTALL_DIR}/image/piccie-bootdiag.service" /etc/systemd/syste
 install -m 755 "${INSTALL_DIR}/image/bootdiag.sh" /usr/local/bin/piccie-bootdiag
 
 # Watertight (read-only root + writable /data) units + scripts.
+install -m 755 "${INSTALL_DIR}/image/piccie-grow-data.sh" /usr/local/sbin/piccie-grow-data
 install -m 755 "${INSTALL_DIR}/image/piccie-firstboot-datapart.sh" /usr/local/bin/piccie-firstboot-datapart
 install -m 755 "${INSTALL_DIR}/image/piccie-lockdown.sh" /usr/local/bin/piccie-lockdown
+install -m 644 "${INSTALL_DIR}/image/piccie-grow-data.service" /etc/systemd/system/
 install -m 644 "${INSTALL_DIR}/image/piccie-firstboot-datapart.service" /etc/systemd/system/
 install -m 644 "${INSTALL_DIR}/image/piccie-lockdown.service" /etc/systemd/system/
 install -m 644 "${INSTALL_DIR}/image/data-fallback.service" /etc/systemd/system/
@@ -74,7 +76,7 @@ systemctl mask cloud-init.service cloud-init-local.service cloud-init-main.servi
   cloud-init-network.service cloud-config.service cloud-final.service 2>/dev/null || true
 
 systemctl daemon-reload
-systemctl enable piccie-firstboot-datapart \
+systemctl enable piccie-grow-data piccie-firstboot-datapart \
   piccie-lockdown data-fallback piccie-engine \
   piccie-bootdiag
 
