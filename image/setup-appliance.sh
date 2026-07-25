@@ -18,7 +18,11 @@ fi
 # --system-site-packages so the venv can see the apt-installed python3-picamera2
 # and python3-libcamera (neither is pip-installable).
 python3 -m venv --system-site-packages "${INSTALL_DIR}/venv"
-"${INSTALL_DIR}/venv/bin/pip" install -r "${INSTALL_DIR}/requirements.txt"
+"${INSTALL_DIR}/venv/bin/pip" install \
+  --retries 10 \
+  --resume-retries 10 \
+  --timeout 120 \
+  -r "${INSTALL_DIR}/requirements.txt"
 
 install -m 644 "${INSTALL_DIR}/image/piccie-engine.service" /etc/systemd/system/
 install -m 755 "${INSTALL_DIR}/image/kiosk-launch.sh" /usr/local/bin/piccie-kiosk
@@ -30,8 +34,10 @@ install -m 644 "${INSTALL_DIR}/image/piccie-bootdiag.service" /etc/systemd/syste
 install -m 755 "${INSTALL_DIR}/image/bootdiag.sh" /usr/local/bin/piccie-bootdiag
 
 # Watertight (read-only root + writable /data) units + scripts.
+install -m 755 "${INSTALL_DIR}/image/piccie-grow-data.sh" /usr/local/sbin/piccie-grow-data
 install -m 755 "${INSTALL_DIR}/image/piccie-firstboot-datapart.sh" /usr/local/bin/piccie-firstboot-datapart
 install -m 755 "${INSTALL_DIR}/image/piccie-lockdown.sh" /usr/local/bin/piccie-lockdown
+install -m 644 "${INSTALL_DIR}/image/piccie-grow-data.service" /etc/systemd/system/
 install -m 644 "${INSTALL_DIR}/image/piccie-firstboot-datapart.service" /etc/systemd/system/
 install -m 644 "${INSTALL_DIR}/image/piccie-lockdown.service" /etc/systemd/system/
 install -m 644 "${INSTALL_DIR}/image/data-fallback.service" /etc/systemd/system/
@@ -74,7 +80,7 @@ systemctl mask cloud-init.service cloud-init-local.service cloud-init-main.servi
   cloud-init-network.service cloud-config.service cloud-final.service 2>/dev/null || true
 
 systemctl daemon-reload
-systemctl enable piccie-firstboot-datapart \
+systemctl enable piccie-grow-data piccie-firstboot-datapart \
   piccie-lockdown data-fallback piccie-engine \
   piccie-bootdiag
 

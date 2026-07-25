@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# First boot only: seed the directories the appliance needs on the (fixed-size,
-# fstab-mounted) /data partition. No partition resize, no manual mount, no
-# growfs — those race systemd and deadlock boot. /data is mounted by systemd
-# from fstab before this runs (ordered After=data-fallback.service + local-fs.target).
+# First boot only: seed the directories the appliance needs after the early
+# piccie-grow-data service has safely expanded and verified the unmounted
+# partition/filesystem. /data is then mounted by systemd from fstab before this
+# runs (ordered After=data-fallback.service + local-fs.target).
 set -euo pipefail
 
 # If /data failed to mount (card too small so p3 was truncated, or the USB/SD

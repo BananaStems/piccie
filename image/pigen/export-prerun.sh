@@ -3,8 +3,8 @@
 # Adds a THIRD partition (p3 = /data) at build time so the appliance can run a
 # read-only root + writable /data. Root is kept fixed-size; the `resize` cmdline
 # token is removed (see image/pigen/cmdline.txt) so root does NOT grow to fill
-# the disk and leave no room for p3. p3 is grown to fill the device on first
-# boot (x-systemd.growfs + piccie-firstboot-datapart).
+# the disk and leave no room for p3. piccie-grow-data expands p3 offline across
+# two boots, before systemd mounts it.
 
 IMG_FILE="${STAGE_WORK_DIR}/${IMG_FILENAME}${IMG_SUFFIX}.img"
 
@@ -22,9 +22,9 @@ ROOT_SIZE=$(du -x --apparent-size -s "${EXPORT_ROOTFS_DIR}" --exclude var/cache/
 ALIGN="$((8 * 1024 * 1024))"
 ROOT_MARGIN="$(echo "($ROOT_SIZE * 0.2 + 200 * 1024 * 1024) / 1" | bc)"
 
-# Dedicated /data partition, FIXED size (no runtime grow — a runtime resize races
-# systemd growfs and deadlocks boot). 8 GiB holds ~hundreds of sessions. Keeping
-# root fixed means root is always clean (read-only).
+# The image ships with an 8 GiB /data filesystem so the downloadable artifact
+# stays compact. On first boot p3 alone expands to the physical card's end; boot
+# and root remain fixed so the root filesystem can stay read-only.
 DATA_SIZE="$((8 * 1024 * 1024 * 1024))"
 
 BOOT_PART_START=$((ALIGN))

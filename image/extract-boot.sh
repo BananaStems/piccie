@@ -34,7 +34,7 @@ trap cleanup EXIT
 
 if [[ "$(uname -s)" == "Darwin" ]]; then
   # Auto-mount works without root; -nomount + mount often fails in sandboxes.
-  ATTACH_OUT="$(hdiutil attach -imagekey diskimage-class=CRawDiskImage "${IMG}")"
+  ATTACH_OUT="$(hdiutil attach -readonly -imagekey diskimage-class=CRawDiskImage "${IMG}")"
   MOUNT_DIR="$(echo "${ATTACH_OUT}" | awk '/Windows_FAT|FAT32|bootfs/ {print $NF; exit}')"
   DISK_DEV="$(echo "${ATTACH_OUT}" | awk 'NR==1 {print $1}')"
   if [[ -z "${MOUNT_DIR}" || ! -d "${MOUNT_DIR}" ]]; then

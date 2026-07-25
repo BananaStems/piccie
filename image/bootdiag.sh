@@ -18,7 +18,9 @@ TMP="$(mktemp 2>/dev/null || echo /tmp/pbdiag.$$)"
   echo "/boot/firmware -> $(findmnt -no FSTYPE,OPTIONS /boot/firmware 2>&1)"
   echo "/data  -> $(findmnt -no FSTYPE,OPTIONS /data 2>&1)"
   echo "### cmdline"; cat /proc/cmdline
-  echo "### lockdown markers"; ls -l /data/.provisioned /data/.lockdown-done /data/.datapart-done /data/.DEGRADED 2>&1
+  echo "### appliance markers"; ls -l /data/.provisioned /data/.lockdown-done /data/.datapart-done /data/.DEGRADED /run/piccie.degraded /run/piccie-data-grow.failed 2>&1
+  echo "### data growth"; systemctl status piccie-grow-data --no-pager -l 2>&1 | tail -20
+  echo "### data growth log"; journalctl -u piccie-grow-data -b --no-pager 2>&1 | tail -40
   echo "### failed units"; systemctl --failed --no-pager
   echo
   echo "### usb storage (bridge id for UAS quirk)"; lsusb 2>&1
