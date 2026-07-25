@@ -18,7 +18,11 @@ fi
 # --system-site-packages so the venv can see the apt-installed python3-picamera2
 # and python3-libcamera (neither is pip-installable).
 python3 -m venv --system-site-packages "${INSTALL_DIR}/venv"
-"${INSTALL_DIR}/venv/bin/pip" install -r "${INSTALL_DIR}/requirements.txt"
+"${INSTALL_DIR}/venv/bin/pip" install \
+  --retries 10 \
+  --resume-retries 10 \
+  --timeout 120 \
+  -r "${INSTALL_DIR}/requirements.txt"
 
 install -m 644 "${INSTALL_DIR}/image/piccie-engine.service" /etc/systemd/system/
 install -m 755 "${INSTALL_DIR}/image/kiosk-launch.sh" /usr/local/bin/piccie-kiosk
