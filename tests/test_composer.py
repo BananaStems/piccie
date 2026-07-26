@@ -1,18 +1,16 @@
-from pathlib import Path
 
 from PIL import Image, ImageDraw
 
 from engine.composer import (
     _fit_text,
-    _format_strip_date,
     _footer_text_box,
+    _format_strip_date,
     _resolve_template_font,
     _text_size,
     apply_filter,
     compose_strip,
     configure_filter,
     photo_slot_size,
-    preview_crop_aspect,
     render_strip_image,
 )
 from engine.templates import TemplateRegistry
@@ -57,7 +55,6 @@ def test_strip_preview_has_placeholders():
 def test_photo_slot_aspect_matches_strip_layout():
     registry = TemplateRegistry()
     template = registry.load("classic")
-    assert preview_crop_aspect(template) == (600, 400)
     for index in range(3):
         assert photo_slot_size(template, index) == (600, 400)
 

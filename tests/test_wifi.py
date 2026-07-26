@@ -50,6 +50,7 @@ def test_connect_linux_success_prefers_latest_venue(monkeypatch):
     monkeypatch.setattr("engine.camera.camera_mode", lambda: "picamera")
     monkeypatch.setattr(wifi_mod.platform, "system", lambda: "Linux")
     monkeypatch.setattr(wifi_mod.secrets, "token_hex", lambda _length: "attempt2")
+    monkeypatch.setattr(wifi_mod, "_current_ssid_linux", lambda: "Venue")
     calls = []
 
     def fake_run_status(cmd, timeout=8):
@@ -64,11 +65,36 @@ def test_connect_linux_success_prefers_latest_venue(monkeypatch):
         "nmcli", "--wait", "30", "device", "wifi", "connect", "Venue",
         "password", "pw", "name", "piccie-wifi-attempt2",
     ]
-    # The just-joined profile is bumped above the provisioned default so it wins
-    # autoconnect at the next reboot.
     assert calls[2] == [
+        "nmcli", "connection", "delete", "id", "piccie-wifi-current",
+    ]
+    assert calls[3] == [
         "nmcli", "connection", "modify", "id", "piccie-wifi-attempt2",
+        "connection.id", "piccie-wifi-current",
         "connection.autoconnect-priority", "10",
+    ]
+
+
+def test_connect_linux_rejects_false_nmcli_success(monkeypatch):
+    monkeypatch.setattr("engine.camera.camera_mode", lambda: "picamera")
+    monkeypatch.setattr(wifi_mod.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(wifi_mod.secrets, "token_hex", lambda _length: "attempt3")
+    monkeypatch.setattr(wifi_mod, "_current_ssid_linux", lambda: "Other")
+    monkeypatch.setattr(wifi_mod.time, "sleep", lambda _seconds: None)
+    calls = []
+
+    def fake_run_status(cmd, timeout=8):
+        calls.append(cmd)
+        return 0, ""
+
+    monkeypatch.setattr(wifi_mod, "_run_status", fake_run_status)
+
+    result = wifi_mod.connect_network("Venue", "pw")
+
+    assert not result.ok
+    assert "did not stay connected" in result.error
+    assert calls[-1] == [
+        "nmcli", "connection", "delete", "id", "piccie-wifi-attempt3",
     ]
 
 

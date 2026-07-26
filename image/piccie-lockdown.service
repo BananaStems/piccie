@@ -7,6 +7,7 @@ ConditionPathExists=!/data/.lockdown-done
 [Service]
 Type=oneshot
 RemainAfterExit=yes
+ExecStartPre=/bin/sleep 5
 ExecStart=/usr/local/bin/piccie-lockdown
 
 [Install]

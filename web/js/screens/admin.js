@@ -20,12 +20,20 @@ export function renderAdminScreen({
   const diskWarning = state.status?.disk_low
     ? `<p class="admin-disk-warning">Storage low (${state.status.disk_free_mb} MB free). Delete old events to keep shooting.</p>`
     : "";
+  const cloudWarning = state.status?.r2_reachable === false
+    ? `<p class="admin-disk-warning">Guest downloads unavailable. ${escapeHtml(state.status.r2_last_error || "Check Wi-Fi and R2.")}</p>`
+    : "";
+  const uploadWarning = state.status?.upload_failed
+    ? `<p class="admin-disk-warning">${state.status.upload_failed} photo upload${state.status.upload_failed === 1 ? "" : "s"} failed and will retry automatically.</p>`
+    : "";
   const wifiConnected = Boolean(state.status?.wifi_ssid);
   const wifiLabel = state.status?.wifi_ssid || "No Wi-Fi";
   app.innerHTML = `
     <div class="screen admin-page admin-screen has-bottom-bar">
       ${dataWarning}
       ${diskWarning}
+      ${cloudWarning}
+      ${uploadWarning}
       <div class="event-grid drag-scroll" id="event-grid">
         ${state.events.length === 0 ? '<div class="empty-state"><p>No events yet</p></div>' : ""}
         ${state.events.map((event) => `
@@ -118,10 +126,14 @@ export function renderAdminScreen({
   });
 }
 
-function galleryQrMarkup(session) {
-  return session?.r2_strip_url
-    ? `<img class="qr-code" src="/api/qr?data=${encodeURIComponent(session.r2_strip_url)}" alt="QR code to download this photo strip" /><p>Scan to download</p>`
-    : `<p class="subtitle">Upload pending</p>`;
+function galleryQrMarkup(session, escapeHtml) {
+  if (session?.r2_strip_url) {
+    return `<img class="qr-code" src="/api/qr?data=${encodeURIComponent(session.r2_strip_url)}" alt="QR code to download this photo strip" /><p>Scan to download</p>`;
+  }
+  if (session?.upload_status === "failed" || session?.upload_status === "corrupt") {
+    return `<p class="error-text">Upload failed</p><p class="subtitle">${escapeHtml(session.upload_error || "Piccie will retry automatically.")}</p>`;
+  }
+  return `<p class="subtitle">Upload pending</p>`;
 }
 
 export function renderGalleryScreen({ app, state, render, api, escapeHtml }) {
@@ -148,7 +160,7 @@ export function renderGalleryScreen({ app, state, render, api, escapeHtml }) {
           </div>
           <div class="gallery-detail">
             <div class="gallery-strip-panel"><img src="${selected.strip_local_url}" alt="Selected photo strip" /></div>
-            <div class="gallery-qr-panel">${galleryQrMarkup(selected)}</div>
+            <div class="gallery-qr-panel">${galleryQrMarkup(selected, escapeHtml)}</div>
           </div>
         </div>`}
       <nav class="bottom-bar" aria-label="Gallery actions">
@@ -193,7 +205,7 @@ export function renderGalleryScreen({ app, state, render, api, escapeHtml }) {
       app.querySelectorAll(".gallery-thumb").forEach((item) => item.setAttribute("aria-pressed", item === thumb));
       thumb.classList.add("selected");
       app.querySelector(".gallery-strip-panel img").src = next.strip_local_url;
-      app.querySelector(".gallery-qr-panel").innerHTML = galleryQrMarkup(next);
+      app.querySelector(".gallery-qr-panel").innerHTML = galleryQrMarkup(next, escapeHtml);
     };
   });
 

@@ -1,7 +1,22 @@
 from unittest.mock import MagicMock
+
 from engine.config import R2Config
 from engine.paths import r2_event_archive_key, r2_event_strip_key, r2_share_key
 from engine.r2 import R2Uploader
+
+
+class Response:
+    def __init__(self, body):
+        self.body = body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+    def read(self):
+        return self.body
 
 
 def test_eu_jurisdiction_uses_eu_endpoint():
@@ -20,11 +35,11 @@ def test_upload_session_is_private_and_returns_worker_link(tmp_path):
     session = "22222222-2222-4222-8222-222222222222"
     token = f"{event}.{session}.secret"
 
-    url, image_url, returned_token = uploader.upload_session(
+    url, returned_token = uploader.upload_session(
         tmp_path, event, session, "Sarah & James", "2026-06-14", share_token=token
     )
 
-    assert url == image_url == f"https://gallery.example/s/{token}"
+    assert url == f"https://gallery.example/s/{token}"
     assert returned_token == token
     upload = uploader.client.upload_file.call_args
     assert upload.args[2] == r2_event_strip_key(event, session)
@@ -71,3 +86,54 @@ def test_delete_event_target_removes_every_object_under_prefix():
     )
     deleted = uploader.client.delete_objects.call_args.kwargs["Delete"]["Objects"]
     assert deleted == [{"Key": f"events/{event}/manifest.json"}]
+
+
+def test_delete_share_target_removes_exact_hashed_record():
+    config = R2Config("acct", "key", "secret", "photos", "https://gallery.example")
+    uploader = R2Uploader(config)
+    uploader.client = MagicMock()
+    event = "11111111-1111-4111-8111-111111111111"
+    token = f"{event}.session.secret"
+
+    uploader.delete_target(f"event-share:{event}:{token}")
+
+    uploader.client.delete_object.assert_called_once_with(
+        Bucket="photos",
+        Key=r2_share_key(event, token),
+    )
+
+
+def test_guest_download_must_match_uploaded_strip(tmp_path, monkeypatch):
+    strip = tmp_path / "strip.jpg"
+    strip.write_bytes(b"jpeg bytes")
+    config = R2Config("acct", "key", "secret", "photos", "https://gallery.example")
+    uploader = R2Uploader(config)
+    monkeypatch.setattr(
+        "engine.r2.urllib.request.urlopen",
+        lambda _request, timeout: Response(b"jpeg bytes"),
+    )
+
+    uploader.verify_guest_download("https://gallery.example/s/token", strip)
+
+
+def test_guest_download_mismatch_fails_closed(tmp_path, monkeypatch):
+    strip = tmp_path / "strip.jpg"
+    strip.write_bytes(b"expected")
+    config = R2Config("acct", "key", "secret", "photos", "https://gallery.example")
+    uploader = R2Uploader(config)
+    monkeypatch.setattr(
+        "engine.r2.urllib.request.urlopen",
+        lambda _request, timeout: Response(b"wrong"),
+    )
+    monkeypatch.setattr("engine.r2.time.sleep", lambda _seconds: None)
+
+    try:
+        uploader.verify_guest_download(
+            "https://gallery.example/s/token",
+            strip,
+            attempts=2,
+        )
+    except RuntimeError as exc:
+        assert "guest link" in str(exc)
+    else:
+        raise AssertionError("mismatched guest bytes should fail the upload")

@@ -33,9 +33,12 @@ export function renderOnboardingScreen({ app, state, render, api, escapeHtml, lo
         <div class="onboarding-network-list" id="onboarding-network-list">
           <div class="spinner"></div>
         </div>
+        <button class="text-button" type="button" id="onboarding-hidden-network">Join a hidden network</button>
         <div class="onboarding-wifi-form" id="onboarding-wifi-form" hidden>
           <div class="onboarding-selected-network">
             <span>Connect to</span><strong id="onboarding-ssid"></strong>
+            <input id="onboarding-hidden-ssid" type="text" inputmode="none"
+              autocomplete="off" placeholder="Hidden network name" hidden />
           </div>
           <div class="password-field" id="onboarding-password-field">
             <input id="onboarding-wifi-password" type="password" inputmode="none"
@@ -76,11 +79,17 @@ export function renderOnboardingScreen({ app, state, render, api, escapeHtml, lo
       }
     };
 
-    const selectNetwork = (network) => {
+    const selectNetwork = (network, hidden = false) => {
       if (!network) return;
       state.wifiSelected = network.ssid;
+      state.wifiHidden = hidden;
       const form = document.getElementById("onboarding-wifi-form");
-      document.getElementById("onboarding-ssid").textContent = network.ssid;
+      const ssidLabel = document.getElementById("onboarding-ssid");
+      const hiddenSsid = document.getElementById("onboarding-hidden-ssid");
+      ssidLabel.textContent = network.ssid;
+      ssidLabel.hidden = hidden;
+      hiddenSsid.hidden = !hidden;
+      hiddenSsid.value = "";
       document.getElementById("onboarding-wifi-message").textContent = "";
       const password = document.getElementById("onboarding-wifi-password");
       password.value = "";
@@ -89,10 +98,12 @@ export function renderOnboardingScreen({ app, state, render, api, escapeHtml, lo
       document.getElementById("onboarding-password-toggle").textContent = "Show";
       document.getElementById("onboarding-wifi-connect").textContent = network.connected ? "Continue" : "Connect";
       form.hidden = false;
-      if (!network.connected) password.focus();
+      if (!network.connected) (hidden ? hiddenSsid : password).focus();
     };
 
     document.getElementById("onboarding-refresh").onclick = loadNetworks;
+    document.getElementById("onboarding-hidden-network").onclick = () =>
+      selectNetwork({ ssid: "", connected: false }, true);
     document.getElementById("onboarding-wifi-cancel").onclick = () => {
       state.wifiSelected = null;
       document.getElementById("onboarding-wifi-form").hidden = true;
@@ -107,7 +118,7 @@ export function renderOnboardingScreen({ app, state, render, api, escapeHtml, lo
       toggle.textContent = visible ? "Show" : "Hide";
     };
     document.getElementById("onboarding-wifi-connect").onclick = async () => {
-      if (!state.wifiSelected) return;
+      if (!state.wifiSelected && !state.wifiHidden) return;
       const button = document.getElementById("onboarding-wifi-connect");
       const message = document.getElementById("onboarding-wifi-message");
       const selected = state.wifiNetworks.find((network) => network.ssid === state.wifiSelected);
@@ -121,11 +132,22 @@ export function renderOnboardingScreen({ app, state, render, api, escapeHtml, lo
       button.setAttribute("aria-busy", "true");
       message.className = "wifi-msg onboarding-wifi-message";
       message.setAttribute("role", "status");
-      message.textContent = `Connecting to ${state.wifiSelected}…`;
+      message.textContent = "Connecting to Wi-Fi…";
       closeOnScreenKeyboard();
       try {
-        await api.connectWifi(state.wifiSelected, password.value || null);
+        const ssid = state.wifiHidden
+          ? document.getElementById("onboarding-hidden-ssid").value.trim()
+          : state.wifiSelected;
+        if (!ssid) throw new Error("Enter the hidden network name.");
+        const result = await api.connectWifi(ssid, password.value || null, state.wifiHidden);
         state.status = await api.status();
+        if (result.warning) {
+          message.className = "wifi-msg onboarding-wifi-message error";
+          message.textContent = `Wi-Fi connected, but cloud access failed: ${result.warning}`;
+          button.disabled = false;
+          button.removeAttribute("aria-busy");
+          return;
+        }
         state.onboardingStep = "providers";
         render();
       } catch (error) {
@@ -233,10 +255,7 @@ export function renderOnboardingScreen({ app, state, render, api, escapeHtml, lo
           ssh_authorized_key: data.get("ssh_authorized_key"),
           r2: state.onboardingR2,
         });
-        await api.unlockAdmin(pin);
-        state.status = await api.status();
-        await loadAdminData();
-        state.view = "admin";
+        state.onboardingStep = "restart";
         render();
       } catch (error) {
         message.className = "onboarding-submit-message field-wide error-text";
@@ -246,5 +265,43 @@ export function renderOnboardingScreen({ app, state, render, api, escapeHtml, lo
     };
   };
 
-  ({ wifi: showWifi, providers: showProviders, r2: showR2, finish: showFinish }[state.onboardingStep] || showWifi)();
+  const showRestart = () => {
+    shell(
+      "booth",
+      "Securing your booth",
+      "Piccie is restarting once to protect the operating system. Keep the power connected.",
+      `<div class="centered"><div class="spinner"></div><p class="onboarding-submit-message">Restarting…</p></div>`,
+    );
+    if (state.onboardingRestartPolling) return;
+    state.onboardingRestartPolling = true;
+    (async () => {
+      let sawRestart = false;
+      for (let attempt = 0; attempt < 90; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+        try {
+          const latest = await api.status();
+          if ((sawRestart || attempt >= 10) && !latest.onboarding_required) {
+            window.location.reload();
+            return;
+          }
+        } catch {
+          sawRestart = true;
+        }
+      }
+      const message = document.querySelector(".onboarding-submit-message");
+      if (message) {
+        message.className = "onboarding-submit-message error-text";
+        message.textContent = "The restart is taking longer than expected. Keep power connected; Piccie will recover automatically.";
+      }
+      state.onboardingRestartPolling = false;
+    })();
+  };
+
+  ({
+    wifi: showWifi,
+    providers: showProviders,
+    r2: showR2,
+    finish: showFinish,
+    restart: showRestart,
+  }[state.onboardingStep] || showWifi)();
 }

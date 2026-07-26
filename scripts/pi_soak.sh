@@ -13,11 +13,16 @@ MAX_ENGINE_GROWTH_MB="${MAX_ENGINE_GROWTH_MB:-256}"
 MAX_KIOSK_GROWTH_MB="${MAX_KIOSK_GROWTH_MB:-384}"
 MAX_TEMP_C="${MAX_TEMP_C:-80}"
 MIN_DISK_FREE_MB="${MIN_DISK_FREE_MB:-500}"
-MAX_UPLOAD_BACKLOG="${MAX_UPLOAD_BACKLOG:-50}"
+MAX_UPLOAD_BACKLOG="${MAX_UPLOAD_BACKLOG:-0}"
+SKIP_UPLOAD_CHECK="${SKIP_UPLOAD_CHECK:-0}"
 BASE_URL="${BASE_URL:-http://localhost:8080}"
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 START_EPOCH="$(date +%s)"
 LOG_FILE="${LOG_FILE:-/tmp/piccie-soak-$(date +%Y%m%d-%H%M%S).log}"
+SOAK_UPLOAD_ARGS=()
+if [[ "${SKIP_UPLOAD_CHECK}" == "1" ]]; then
+  SOAK_UPLOAD_ARGS+=(--skip-upload-check)
+fi
 
 exec > >(tee -a "${LOG_FILE}") 2>&1
 
@@ -92,7 +97,8 @@ while (( DEADLINE > 0 || round <= ROUNDS )); do
     --sessions "${SESSIONS_PER_ROUND}" \
     --pause-seconds "${PAUSE_SECONDS}" \
     --min-disk-free-mb "${MIN_DISK_FREE_MB}" \
-    --max-upload-backlog "${MAX_UPLOAD_BACKLOG}"
+    --max-upload-backlog "${MAX_UPLOAD_BACKLOG}" \
+    "${SOAK_UPLOAD_ARGS[@]}"
 
   ENGINE_MEMORY_MB="$(service_memory_mb piccie-engine)"
   KIOSK_MEMORY_MB="$(kiosk_memory_mb)"

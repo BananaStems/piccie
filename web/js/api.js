@@ -65,19 +65,20 @@ export const api = {
   archiveTemplate: (id) => request(`/templates/${id}/archive`, { method: "POST" }),
   restoreTemplate: (id) => request(`/templates/${id}/restore`, { method: "POST" }),
   deleteTemplate: (id) => request(`/templates/${id}`, { method: "DELETE" }),
-  listWifiNetworks: () => request("/wifi/networks"),
+  listWifiNetworks: () => request("/wifi/networks", { timeoutMs: 30000 }),
   connectWifi: (ssid, password, hidden = false) =>
     request("/wifi/connect", {
       method: "POST",
       body: JSON.stringify({ ssid, password, hidden }),
-      timeoutMs: 45000,
+      timeoutMs: 420000,
     }),
   completeOnboarding: (data) =>
     request("/onboarding/complete", {
       method: "POST",
       body: JSON.stringify(data),
-      timeoutMs: 60000,
+      timeoutMs: 420000,
     }),
+  preflight: () => request("/admin/preflight", { method: "POST", timeoutMs: 420000 }),
   getCameraSettings: () => request("/settings/camera"),
   updateCameraSettings: (patch) =>
     request("/settings/camera", { method: "PUT", body: JSON.stringify(patch) }),
@@ -85,9 +86,12 @@ export const api = {
   getPerformanceSettings: () => request("/settings/performance"),
   updatePerformanceSettings: (data) =>
     request("/settings/performance", { method: "PUT", body: JSON.stringify(data) }),
-  startSession: (eventId) => request(`/events/${eventId}/sessions`, { method: "POST" }),
-  capture: (sessionId, index) => request(`/sessions/${sessionId}/capture/${index}`, { method: "POST" }),
-  finalize: (sessionId) => request(`/sessions/${sessionId}/finalize`, { method: "POST" }),
+  startSession: (eventId) =>
+    request(`/events/${eventId}/sessions`, { method: "POST", timeoutMs: 20000 }),
+  capture: (sessionId, index) =>
+    request(`/sessions/${sessionId}/capture/${index}`, { method: "POST", timeoutMs: 25000 }),
+  finalize: (sessionId) =>
+    request(`/sessions/${sessionId}/finalize`, { method: "POST", timeoutMs: 60000 }),
   getSession: (sessionId) => request(`/sessions/${sessionId}`),
   photoUrl: (sessionId, index) => `/api/sessions/${sessionId}/photos/${index}`,
   previewUrl: (templateId, line1, date, line2 = "", dateSeparator = "/") => {
@@ -99,11 +103,5 @@ export const api = {
     });
     return `/api/templates/${templateId}/preview?${params.toString()}`;
   },
-  cameraPreviewUrl: (photoWidth, photoHeight) => {
-    const base = "/api/camera/preview";
-    if (photoWidth && photoHeight) {
-      return `${base}?w=${photoWidth}&h=${photoHeight}`;
-    }
-    return base;
-  },
+  cameraPreviewUrl: () => "/api/camera/preview",
 };

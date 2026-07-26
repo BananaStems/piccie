@@ -14,6 +14,7 @@ def test_status_limits_fail_closed() -> None:
         "data_degraded": False,
         "disk_free_mb": 1000,
         "upload_backlog": 2,
+        "r2_reachable": True,
     }
 
     check_status(healthy, min_disk_free_mb=500, max_upload_backlog=10)
@@ -25,3 +26,18 @@ def test_status_limits_fail_closed() -> None:
         assert "Upload backlog" in str(exc)
     else:
         raise AssertionError("backlog limit should fail the soak test")
+
+    cloud_down = {**healthy, "r2_reachable": False, "r2_last_error": "Worker down"}
+    try:
+        check_status(cloud_down, min_disk_free_mb=500, max_upload_backlog=10)
+    except RuntimeError as exc:
+        assert "Worker down" in str(exc)
+    else:
+        raise AssertionError("cloud failure should fail the soak test")
+
+    check_status(
+        cloud_down,
+        min_disk_free_mb=500,
+        max_upload_backlog=10,
+        require_cloud=False,
+    )

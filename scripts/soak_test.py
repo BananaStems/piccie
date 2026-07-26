@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
-"""Run repeated mock capture sessions against a local dev server."""
+"""Run repeated capture-to-guest-download sessions against a Piccie booth."""
 
 from __future__ import annotations
 
 import argparse
 import json
-import os
 import statistics
 import sys
 import time
@@ -27,6 +26,11 @@ def request(method: str, url: str, body: dict | None = None, timeout: float = 60
         return json.loads(raw) if raw else {}
 
 
+def request_bytes(url: str, timeout: float = 60) -> bytes:
+    with urllib.request.urlopen(url, timeout=timeout) as resp:
+        return resp.read()
+
+
 def percentile(values: list[float], percentage: float) -> float:
     """Return a nearest-rank percentile without adding a statistics dependency."""
     if not values:
@@ -36,7 +40,13 @@ def percentile(values: list[float], percentage: float) -> float:
     return ordered[index]
 
 
-def check_status(status: dict, min_disk_free_mb: int, max_upload_backlog: int) -> None:
+def check_status(
+    status: dict,
+    min_disk_free_mb: int,
+    max_upload_backlog: int,
+    *,
+    require_cloud: bool = True,
+) -> None:
     if not status.get("camera_available"):
         raise RuntimeError("Camera unavailable")
     if status.get("data_degraded"):
@@ -47,6 +57,11 @@ def check_status(status: dict, min_disk_free_mb: int, max_upload_backlog: int) -
     backlog = status.get("upload_backlog")
     if backlog is not None and backlog > max_upload_backlog:
         raise RuntimeError(f"Upload backlog exceeded {max_upload_backlog} ({backlog})")
+    if require_cloud and status.get("r2_reachable") is not True:
+        raise RuntimeError(
+            "Guest delivery has not been verified: "
+            f"{status.get('r2_last_error') or 'readiness check still pending'}"
+        )
 
 
 def main() -> int:
@@ -58,7 +73,13 @@ def main() -> int:
     parser.add_argument("--status-every", type=int, default=10)
     parser.add_argument("--timeout", type=float, default=60)
     parser.add_argument("--min-disk-free-mb", type=int, default=500)
-    parser.add_argument("--max-upload-backlog", type=int, default=50)
+    parser.add_argument("--max-upload-backlog", type=int, default=0)
+    parser.add_argument("--upload-timeout", type=float, default=120)
+    parser.add_argument(
+        "--skip-upload-check",
+        action="store_true",
+        help="Exercise capture/composition only; do not require an R2 guest download.",
+    )
     args = parser.parse_args()
 
     if args.sessions < 1:
@@ -66,11 +87,17 @@ def main() -> int:
     if args.status_every < 1:
         parser.error("--status-every must be at least 1")
 
-    os.environ.setdefault("PICCIE_CAMERA", "mock")
     base = args.base.rstrip("/")
 
     status = request("GET", f"{base}/api/status", timeout=args.timeout)
-    check_status(status, args.min_disk_free_mb, args.max_upload_backlog)
+    check_status(
+        status,
+        args.min_disk_free_mb,
+        args.max_upload_backlog,
+        # A stale startup probe may still say offline after Wi-Fi recovered. The
+        # first real session below is the authoritative cloud check.
+        require_cloud=False,
+    )
     print(f"disk_free_mb={status.get('disk_free_mb')} upload_backlog={status.get('upload_backlog')}")
 
     event_id = args.event_id
@@ -93,12 +120,47 @@ def main() -> int:
         final = request("POST", f"{base}/api/sessions/{session_id}/finalize", timeout=args.timeout)
         if not final.get("strip_local_url"):
             raise RuntimeError(f"Session {session_id} returned no composed strip")
+        if not args.skip_upload_check:
+            deadline = time.monotonic() + args.upload_timeout
+            while not final.get("r2_strip_url"):
+                if final.get("upload_status") in {"failed", "corrupt"}:
+                    raise RuntimeError(
+                        f"Session {session_id} upload {final['upload_status']}: "
+                        f"{final.get('upload_error') or 'unknown error'}"
+                    )
+                if time.monotonic() >= deadline:
+                    raise RuntimeError(
+                        f"Session {session_id} did not upload within {args.upload_timeout}s"
+                    )
+                time.sleep(2)
+                final = request(
+                    "GET",
+                    f"{base}/api/sessions/{session_id}",
+                    timeout=args.timeout,
+                )
+            local_strip = request_bytes(
+                f"{base}{final['strip_local_url']}",
+                timeout=args.timeout,
+            )
+            guest_strip = request_bytes(
+                final["r2_strip_url"],
+                timeout=args.timeout,
+            )
+            if guest_strip != local_strip:
+                raise RuntimeError(
+                    f"Session {session_id} guest download did not match its local strip"
+                )
         elapsed = time.perf_counter() - t0
         latencies.append(elapsed)
         print(f"session {n}/{args.sessions} ok in {elapsed:.2f}s")
         if n % args.status_every == 0 or n == args.sessions:
             status = request("GET", f"{base}/api/status", timeout=args.timeout)
-            check_status(status, args.min_disk_free_mb, args.max_upload_backlog)
+            check_status(
+                status,
+                args.min_disk_free_mb,
+                args.max_upload_backlog,
+                require_cloud=not args.skip_upload_check,
+            )
             print(
                 f"  status disk_free_mb={status.get('disk_free_mb')} "
                 f"upload_backlog={status.get('upload_backlog')}"

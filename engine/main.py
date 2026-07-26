@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import threading
-from ipaddress import ip_address
 from contextlib import asynccontextmanager
+from ipaddress import ip_address
 
 from fastapi import FastAPI
 from fastapi.responses import PlainTextResponse
@@ -10,7 +10,7 @@ from fastapi.staticfiles import StaticFiles
 
 from engine.api.routes import router
 from engine.camera import CameraService
-from engine.config import ConfigStore, ROOT_DIR
+from engine.config import ROOT_DIR, ConfigStore
 from engine.kiosk_watchdog import KioskWatchdog
 from engine.storage import Storage
 from engine.templates import TemplateRegistry
@@ -56,7 +56,9 @@ async def lifespan(app: FastAPI):
     storage.prune_abandoned_sessions()
     storage.sweep_orphan_dirs()
     app.state.upload_queue.resume_pending()
+    app.state.upload_queue.check_cloud_health_async()
     yield
+    app.state.upload_queue.close()
     # Checkpoint the WAL on a clean stop so the -wal file doesn't grow unbounded.
     try:
         with storage._connect() as conn:
