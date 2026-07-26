@@ -18,6 +18,7 @@ set -euo pipefail
 if [ -e /boot/firmware/piccie-no-readonly ]; then
   echo "lockdown: kill switch present; leaving root writable."
   touch /data/.lockdown-done 2>/dev/null || true
+  rm -f /data/.lockdown-requested
   exit 0
 fi
 
@@ -30,11 +31,16 @@ fi
 # frozen, /data volatile) with no way to re-provision. Bail until /data is real.
 if [ -e /data/.DEGRADED ] || ! mountpoint -q /data; then
   echo "lockdown: /data degraded or not mounted; refusing to lock down."
+  rm -f /data/.lockdown-requested
   exit 0
 fi
 case "$(findmnt -no FSTYPE /data 2>/dev/null)" in
   ext4|ext3|btrfs|xfs) : ;;
-  *) echo "lockdown: /data is not a real disk filesystem; refusing to lock down."; exit 0 ;;
+  *)
+    echo "lockdown: /data is not a real disk filesystem; refusing to lock down."
+    rm -f /data/.lockdown-requested
+    exit 0
+    ;;
 esac
 
 # Stop the engine so its periodic /data writes cannot be torn by the reboot.
@@ -48,6 +54,7 @@ raspi-config nonint do_bootro 0 || true     # 0 = enable boot read-only (if supp
 raspi-config nonint do_overlayfs 0          # 0 = enable root overlay (critical)
 
 touch /data/.lockdown-done
+rm -f /data/.lockdown-requested
 sync
-systemctl disable piccie-lockdown.service || true
+systemctl disable piccie-lockdown.service piccie-lockdown.path || true
 systemctl reboot

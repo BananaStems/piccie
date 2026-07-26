@@ -162,8 +162,10 @@ remove power or the card during that restart.
 6. Add your computer's SSH public key if you want remote updates and access to
    the soak test.
 
-Piccie verifies the storage connection before completing onboarding. The
-bucket remains private and no custom domain is required.
+Piccie uploads a temporary private strip and downloads it through the guest
+Worker before completing onboarding. It then restarts once more to enable the
+read-only system protection. Keep power connected until the admin screen
+appears. The bucket remains private and no custom domain is required.
 
 ## 4. Check the booth
 
@@ -190,10 +192,15 @@ ssh pi@piccie.local
 sudo DURATION_MINUTES=480 /data/app/current/scripts/pi_soak.sh
 ```
 
-The test repeatedly creates mock sessions while checking the engine, Chromium,
-memory growth, temperature, throttling, free storage, upload backlog and process
-restarts. A healthy run ends with `soak_pass` and prints the log path. Do not use
-the booth for guests while this test is running.
+The test uses the booth's configured camera, completes the full three-photo
+flow, waits for every R2 upload, downloads each guest link and byte-compares it
+with the local strip. It also checks the engine, Chromium, memory growth,
+temperature, throttling, free storage, upload backlog and process restarts. A
+healthy run ends with `soak_pass` and prints the log path. Do not use the booth
+for guests while this test is running.
+
+For development without R2 only, set `SKIP_UPLOAD_CHECK=1`. Never use that
+option for an event-readiness run.
 
 If the test fails, review the printed reason and the engine log before relying
 on the booth at an event:

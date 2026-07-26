@@ -5,6 +5,7 @@ import platform
 import re
 import secrets
 import subprocess
+import time
 from dataclasses import dataclass
 
 
@@ -245,10 +246,48 @@ def connect_network(ssid: str, password: str | None = None, hidden: bool = False
         # disposable profile from this attempt so the next password starts clean.
         _run_status(["nmcli", "connection", "delete", "id", profile_name], timeout=8)
         return WifiResult(ok=False, ssid=ssid, error=_nmcli_error(output, code))
-    # Prefer the just-joined network on the next reboot. The provisioned profile is
-    # left at the default autoconnect-priority (0); bumping the runtime profile above
-    # it means moving between venues sticks to the latest manual choice, and among
-    # several manual profiles NetworkManager tie-breaks equal priority by most-recently
-    # active. Best-effort, non-fatal if this cosmetic preference cannot be saved.
-    _run_status(["nmcli", "connection", "modify", "id", profile_name, "connection.autoconnect-priority", "10"], timeout=8)
+
+    # nmcli can return before association state settles. Do not claim success until
+    # NetworkManager reports the requested SSID as active.
+    for attempt in range(10):
+        if _current_ssid_linux() == ssid:
+            break
+        if attempt < 9:
+            time.sleep(1)
+    else:
+        _run_status(["nmcli", "connection", "delete", "id", profile_name], timeout=8)
+        return WifiResult(
+            ok=False,
+            ssid=ssid,
+            error="Wi-Fi did not stay connected. Move closer to the router and try again.",
+        )
+
+    # Retain exactly one Piccie-managed venue profile. The prior working profile
+    # remains available until the new SSID is verified, so a bad password cannot
+    # strand the booth. Then atomically make this attempt the preferred profile.
+    stable_profile = "piccie-wifi-current"
+    _run_status(["nmcli", "connection", "delete", "id", stable_profile], timeout=8)
+    save_code, save_output = _run_status(
+        [
+            "nmcli",
+            "connection",
+            "modify",
+            "id",
+            profile_name,
+            "connection.id",
+            stable_profile,
+            "connection.autoconnect-priority",
+            "10",
+        ],
+        timeout=8,
+    )
+    if save_code != 0:
+        return WifiResult(
+            ok=False,
+            ssid=ssid,
+            error=(
+                "Wi-Fi connected, but Piccie could not save it for the next reboot: "
+                f"{_nmcli_error(save_output, save_code)}"
+            ),
+        )
     return WifiResult(ok=True, ssid=ssid)

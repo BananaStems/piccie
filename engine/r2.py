@@ -3,6 +3,9 @@ from __future__ import annotations
 import json
 import logging
 import secrets
+import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 import boto3
@@ -48,13 +51,13 @@ class R2Uploader:
         event_name: str,
         event_date: str,
         share_token: str | None = None,
-    ) -> tuple[str, str, str]:
+    ) -> tuple[str, str]:
         """Upload a private strip and return its Worker URL and share token."""
         strip_local = session_dir / "strip.jpg"
         strip_key = r2_event_strip_key(event_id, session_id)
         self._upload_file(strip_local, strip_key, content_type="image/jpeg")
 
-        token = share_token or f"{event_id}.{session_id}.{secrets.token_urlsafe(32)}"
+        token = share_token or self.new_session_share_token(event_id, session_id)
         self._upload_json(
             {
                 "kind": "strip",
@@ -65,7 +68,11 @@ class R2Uploader:
         )
         self._upload_manifest(event_id, event_name, event_date)
         url = self.public_url(f"s/{token}")
-        return url, url, token
+        return url, token
+
+    @staticmethod
+    def new_session_share_token(event_id: str, session_id: str) -> str:
+        return f"{event_id}.{session_id}.{secrets.token_urlsafe(32)}"
 
     def publish_event(
         self,
@@ -108,6 +115,13 @@ class R2Uploader:
         if target.startswith("event-session:"):
             _, event_id, session_id = target.split(":", 2)
             self._delete_prefix(f"{r2_event_prefix(event_id)}sessions/{session_id}/")
+            return
+        if target.startswith("event-share:"):
+            _, event_id, token = target.split(":", 2)
+            self.client.delete_object(
+                Bucket=self.config.bucket,
+                Key=r2_share_key(event_id, token),
+            )
             return
         raise ValueError(f"Unknown R2 deletion target: {target}")
 
@@ -161,3 +175,34 @@ class R2Uploader:
     def public_url(self, key: str) -> str:
         base = self.config.public_base_url.rstrip("/")
         return f"{base}/{key}"
+
+    def verify_guest_download(
+        self,
+        url: str,
+        expected_path: Path,
+        *,
+        attempts: int = 5,
+    ) -> None:
+        """Require the Worker to return the exact uploaded JPEG before success."""
+        expected = expected_path.read_bytes()
+        last_error: Exception | None = None
+        for attempt in range(attempts):
+            try:
+                request = urllib.request.Request(
+                    url,
+                    headers={"Cache-Control": "no-cache"},
+                )
+                with urllib.request.urlopen(request, timeout=10) as response:
+                    if response.read() == expected:
+                        return
+                    last_error = RuntimeError(
+                        "The guest link returned different image data."
+                    )
+            except (OSError, urllib.error.HTTPError) as exc:
+                last_error = exc
+            if attempt < attempts - 1:
+                time.sleep(2)
+        raise RuntimeError(
+            "R2 accepted the strip, but its guest link could not return it. "
+            "Check the Worker URL, R2 bucket binding, and venue internet access."
+        ) from last_error

@@ -1,4 +1,3 @@
-import json
 import os
 from pathlib import Path
 
@@ -79,11 +78,12 @@ def test_update_event(storage):
         template_id="love",
     )
     assert switched.template_id == "love"
-    meta = (storage.events_dir / event.id / "meta.json").read_text()
-    assert "Sarah & James" in meta
-    assert "Forever" in meta
-    assert "2027-01-01" in meta
-    assert '"template_id": "love"' in meta
+    stored = storage.get_event(event.id)
+    assert stored.line1 == "Sarah & James"
+    assert stored.line2 == "Forever"
+    assert stored.date == "2027-01-01"
+    assert stored.template_id == "love"
+    assert not (storage.events_dir / event.id / "meta.json").exists()
 
 
 def test_event_strip_line1_falls_back_to_name(storage):
@@ -181,9 +181,6 @@ def test_event_share_roundtrip(storage):
     updated = storage.set_event_share(event.id, "https://gallery.example/g/token", "token")
     assert updated.share_url == "https://gallery.example/g/token"
     assert updated.share_token == "token"
-    meta = json.loads((storage.events_dir / event.id / "meta.json").read_text())
-    assert meta["share_url"] == "https://gallery.example/g/token"
-
     disabled = storage.set_event_share(event.id, None, None)
     assert disabled.share_url is None
     assert disabled.share_token is None
@@ -193,7 +190,7 @@ def test_corrupt_completed_session_is_terminal(storage):
     event = storage.create_event("Wedding", "2026-06-14", "classic")
     session = storage.create_session(event.id)
     session_dir = Path(session.local_path)
-    Image.new("RGB", (1, 1)).save(session_dir / "strip.jpg")
+    (session_dir / "strip.jpg").write_bytes(b"\xff\xd8truncated")
 
     assert storage.list_sessions_needing_upload() == []
     assert storage.get_session(session.id).upload_status == "corrupt"
@@ -203,3 +200,47 @@ def test_corrupt_completed_session_is_terminal(storage):
     assert storage.prune_abandoned_sessions() == 1
     assert storage.get_session(session.id) is None
     assert not session_dir.exists()
+
+
+def test_valid_strip_resumes_without_source_photos(storage):
+    event = storage.create_event("Wedding", "2026-06-14", "classic")
+    session = storage.create_session(event.id)
+    Image.new("RGB", (2, 2)).save(Path(session.local_path) / "strip.jpg")
+
+    assert [item.id for item in storage.list_sessions_needing_upload()] == [session.id]
+
+
+def test_upload_summary_is_database_backed(storage):
+    event = storage.create_event("Wedding", "2026-06-14", "classic")
+    storage.create_session(event.id)
+    failed = storage.create_session(event.id)
+    storage.update_session_upload(
+        failed.id,
+        "failed",
+        error="venue internet unavailable",
+        increment_attempt=True,
+    )
+
+    assert storage.upload_summary() == {
+        "pending": 1,
+        "failed": 1,
+        "last_error": "venue internet unavailable",
+    }
+    refreshed = storage.get_session(failed.id)
+    assert refreshed.upload_attempts == 1
+    assert refreshed.upload_error == "venue internet unavailable"
+
+
+def test_legacy_skipped_uploads_are_requeued_by_migration(storage):
+    event = storage.create_event("Wedding", "2026-06-14", "classic")
+    session = storage.create_session(event.id)
+    with storage._connect() as conn:
+        conn.execute(
+            "UPDATE sessions SET upload_status = 'skipped' WHERE id = ?",
+            (session.id,),
+        )
+        storage._migrate_sessions(conn)
+
+    migrated = storage.get_session(session.id)
+    assert migrated.upload_status == "failed"
+    assert "not configured" in migrated.upload_error

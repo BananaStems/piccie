@@ -6,24 +6,31 @@ export function renderWifiScreen({ app, state, api, escapeHtml, closeOnScreenKey
     try {
       state.wifiNetworks = await api.listWifiNetworks();
       if (state.wifiNetworks.length === 0) {
-        listEl.innerHTML = `<p class="subtitle">No networks found</p>`;
-        return;
+        listEl.innerHTML = `<p class="subtitle">No visible networks found</p>`;
+      } else {
+        listEl.innerHTML = state.wifiNetworks
+          .map(
+            (network, index) => `
+            <button class="wifi-item" type="button" data-idx="${index}">
+              <span>
+                <strong>${escapeHtml(network.ssid)}</strong>
+                ${network.connected ? '<span class="wifi-badge">Connected</span>' : ""}
+              </span>
+              ${network.signal != null ? `<span class="wifi-signal">${network.signal}%</span>` : ""}
+            </button>`,
+          )
+          .join("");
       }
-      listEl.innerHTML = state.wifiNetworks
-        .map(
-          (network, index) => `
-          <button class="wifi-item" type="button" data-idx="${index}">
-            <span>
-              <strong>${escapeHtml(network.ssid)}</strong>
-              ${network.connected ? '<span class="wifi-badge">Connected</span>' : ""}
-            </span>
-            ${network.signal != null ? `<span class="wifi-signal">${network.signal}%</span>` : ""}
-          </button>`,
-        )
-        .join("");
+      listEl.insertAdjacentHTML(
+        "beforeend",
+        `<button class="wifi-item" type="button" id="wifi-hidden-network"><span><strong>Join a hidden network</strong></span></button>`,
+      );
       listEl.querySelectorAll(".wifi-item").forEach((item) => {
-        item.onclick = () => showConnect(state.wifiNetworks[Number(item.dataset.idx)]?.ssid);
+        if (item.id !== "wifi-hidden-network") {
+          item.onclick = () => showConnect(state.wifiNetworks[Number(item.dataset.idx)]?.ssid);
+        }
       });
+      document.getElementById("wifi-hidden-network").onclick = () => showConnect("", true);
     } catch (error) {
       listEl.innerHTML = `<p class="error-text">${escapeHtml(error.message)}</p>`;
     }
@@ -36,12 +43,18 @@ export function renderWifiScreen({ app, state, api, escapeHtml, closeOnScreenKey
     closeOnScreenKeyboard();
   };
 
-  const showConnect = (ssid) => {
-    if (!ssid) return;
+  const showConnect = (ssid, hidden = false) => {
+    if (!ssid && !hidden) return;
     state.wifiSelected = ssid;
+    state.wifiHidden = hidden;
     const panel = document.getElementById("wifi-connect");
     if (!panel) return;
-    document.getElementById("wifi-ssid-label").textContent = ssid;
+    const label = document.getElementById("wifi-ssid-label");
+    const hiddenInput = document.getElementById("wifi-hidden-ssid");
+    label.textContent = ssid;
+    label.hidden = hidden;
+    hiddenInput.hidden = !hidden;
+    hiddenInput.value = "";
     const message = document.getElementById("wifi-msg");
     message.textContent = "";
     message.className = "wifi-msg";
@@ -51,11 +64,13 @@ export function renderWifiScreen({ app, state, api, escapeHtml, closeOnScreenKey
     document.getElementById("wifi-pw-toggle").textContent = "Show";
     document.getElementById("wifi-connect-btn").disabled = false;
     panel.hidden = false;
-    password.focus();
+    (hidden ? hiddenInput : password).focus();
   };
 
   const connect = async () => {
-    const ssid = state.wifiSelected;
+    const ssid = state.wifiHidden
+      ? document.getElementById("wifi-hidden-ssid").value.trim()
+      : state.wifiSelected;
     if (!ssid) return;
     const password = document.getElementById("wifi-pw").value;
     const message = document.getElementById("wifi-msg");
@@ -65,13 +80,19 @@ export function renderWifiScreen({ app, state, api, escapeHtml, closeOnScreenKey
     button.disabled = true;
     closeOnScreenKeyboard();
     try {
-      await api.connectWifi(ssid, password || null);
+      const result = await api.connectWifi(ssid, password || null, state.wifiHidden);
       state.status = await api.status();
-      message.className = "wifi-msg success";
-      message.textContent = `Connected to ${ssid}.`;
-      setTimeout(() => {
-        returnFromWifi();
-      }, 900);
+      message.className = result.warning ? "wifi-msg error" : "wifi-msg success";
+      message.textContent = result.warning
+        ? `Connected to ${ssid}, but guest delivery is unavailable: ${result.warning}`
+        : `Connected to ${ssid}. Guest delivery verified.`;
+      if (result.warning) {
+        button.disabled = false;
+      } else {
+        setTimeout(() => {
+          returnFromWifi();
+        }, 900);
+      }
     } catch (error) {
       message.className = "wifi-msg error";
       message.textContent = error.message;
@@ -89,7 +110,9 @@ export function renderWifiScreen({ app, state, api, escapeHtml, closeOnScreenKey
       <div class="wifi-list drag-scroll" id="wifi-list"><div class="spinner"></div></div>
       <div class="wifi-connect" id="wifi-connect" hidden>
         <div class="form-group">
-          <label>Password for <span id="wifi-ssid-label"></span></label>
+          <label>Network <span id="wifi-ssid-label"></span>
+            <input id="wifi-hidden-ssid" type="text" inputmode="none" autocomplete="off" placeholder="Hidden network name" hidden />
+          </label>
           <div class="password-field">
             <input id="wifi-pw" type="password" inputmode="none" autocomplete="off" />
             <button class="btn btn-secondary password-toggle" type="button" id="wifi-pw-toggle">Show</button>

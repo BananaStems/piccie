@@ -40,6 +40,7 @@ install -m 755 "${INSTALL_DIR}/image/piccie-lockdown.sh" /usr/local/bin/piccie-l
 install -m 644 "${INSTALL_DIR}/image/piccie-grow-data.service" /etc/systemd/system/
 install -m 644 "${INSTALL_DIR}/image/piccie-firstboot-datapart.service" /etc/systemd/system/
 install -m 644 "${INSTALL_DIR}/image/piccie-lockdown.service" /etc/systemd/system/
+install -m 644 "${INSTALL_DIR}/image/piccie-lockdown.path" /etc/systemd/system/
 install -m 644 "${INSTALL_DIR}/image/data-fallback.service" /etc/systemd/system/
 
 if id pi &>/dev/null; then
@@ -81,7 +82,7 @@ systemctl mask cloud-init.service cloud-init-local.service cloud-init-main.servi
 
 systemctl daemon-reload
 systemctl enable piccie-grow-data piccie-firstboot-datapart \
-  piccie-lockdown data-fallback piccie-engine \
+  piccie-lockdown piccie-lockdown.path data-fallback piccie-engine \
   piccie-bootdiag
 
 echo "Piccie appliance setup complete."

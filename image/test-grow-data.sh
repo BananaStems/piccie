@@ -359,6 +359,21 @@ test_systemd_ordering_keeps_growth_offline() {
   assert_contains "${engine_unit}" "Requires=data-fallback.service"
 }
 
+test_provisioning_triggers_one_time_lockdown() {
+  local setup="${REPO_ROOT}/image/setup-appliance.sh"
+  local path_unit="${REPO_ROOT}/image/piccie-lockdown.path"
+  local service="${REPO_ROOT}/image/piccie-lockdown.service"
+  local script="${REPO_ROOT}/image/piccie-lockdown.sh"
+
+  assert_contains "${setup}" "piccie-lockdown.path"
+  assert_contains "${path_unit}" "PathExists=/data/.lockdown-requested"
+  assert_contains "${path_unit}" "Unit=piccie-lockdown.service"
+  assert_contains "${service}" "ConditionPathExists=/data/.provisioned"
+  assert_contains "${service}" "ExecStartPre=/bin/sleep 5"
+  assert_contains "${script}" "rm -f /data/.lockdown-requested"
+  assert_contains "${script}" "systemctl reboot"
+}
+
 run_test() {
   local name="$1"
   "$name"
@@ -382,5 +397,6 @@ run_test test_failure_is_recorded_for_fallback_gate
 run_test test_success_clears_stale_failure_marker
 run_test test_filesystem_resize_must_verify
 run_test test_systemd_ordering_keeps_growth_offline
+run_test test_provisioning_triggers_one_time_lockdown
 
 echo "PASS: ${PASS_COUNT} piccie-grow-data tests"

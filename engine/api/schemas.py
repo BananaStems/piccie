@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from datetime import date as calendar_date, datetime
+from datetime import date as calendar_date
+from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, Field, HttpUrl, field_validator, model_validator
@@ -15,6 +16,11 @@ class StatusResponse(BaseModel):
     disk_low: bool = False
     data_degraded: bool = False
     upload_backlog: int = 0
+    upload_pending: int = 0
+    upload_failed: int = 0
+    upload_last_error: str | None = None
+    r2_reachable: bool | None = None
+    r2_last_error: str | None = None
     active_event_id: str | None = None
     admin_pin_set: bool = False
     onboarding_required: bool = False
@@ -139,6 +145,8 @@ class SessionResponse(BaseModel):
     event_id: str
     created_at: str
     upload_status: str
+    upload_error: str | None = None
+    upload_attempts: int = 0
     r2_strip_url: str | None
     strip_local_url: str | None = None
     photo_local_urls: list[str] = []

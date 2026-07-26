@@ -5,6 +5,7 @@ import io
 import os
 import secrets
 import socket
+import tempfile
 import threading
 import zipfile
 from pathlib import Path
@@ -27,18 +28,15 @@ from engine.api.schemas import (
     WifiConnectRequest,
     WifiNetworkResponse,
 )
-from engine.camera_settings import CAMERA_SETTING_OPTIONS
+from engine.atomicio import jpeg_is_intact
 from engine.camera import appliance_qemu
+from engine.camera_settings import CAMERA_SETTING_OPTIONS
 from engine.composer import (
     _layout_metrics,
     compose_strip,
-    preview_crop_aspect,
     render_strip_preview_jpeg,
     strip_dimensions,
 )
-from engine.provisioning import provision_booth
-from engine.wifi import connect_network, current_ssid, list_networks
-from engine.atomicio import jpeg_is_intact
 from engine.config import AppConfig, ConfigStore
 from engine.paths import r2_session_target, slugify
 from engine.performance import (
@@ -48,12 +46,14 @@ from engine.performance import (
     detected_memory_gb,
     performance_available,
 )
+from engine.provisioning import provision_booth
 from engine.r2 import R2Uploader
-from engine.templates import TemplateRegistry
-from engine.template_packages import GOOGLE_FONTS, install_template
 from engine.storage import data_degraded, disk_free_mb, disk_low
+from engine.template_packages import GOOGLE_FONTS, install_template
+from engine.templates import TemplateRegistry
 from engine.upload_queue import UploadJob
 from engine.version import APP_VERSION, BUILD_ID
+from engine.wifi import connect_network, current_ssid, list_networks
 
 router = APIRouter(prefix="/api")
 
@@ -99,6 +99,9 @@ def status(request: Request) -> StatusResponse:
     if active_event and active_event.is_concluded():
         config = store.set_active_event(None)
     camera = request.app.state.camera
+    upload_summary = request.app.state.storage.upload_summary()
+    cloud_health = getattr(request.app.state.upload_queue, "cloud_health", (None, None))
+    r2_reachable, r2_last_error = cloud_health
     return StatusResponse(
         version=APP_VERSION,
         build=BUILD_ID,
@@ -117,7 +120,12 @@ def status(request: Request) -> StatusResponse:
         disk_free_mb=disk_free_mb(),
         disk_low=disk_low(),
         data_degraded=data_degraded(),
-        upload_backlog=request.app.state.upload_queue.backlog,
+        upload_backlog=upload_summary["pending"] + upload_summary["failed"],
+        upload_pending=upload_summary["pending"],
+        upload_failed=upload_summary["failed"],
+        upload_last_error=upload_summary["last_error"],
+        r2_reachable=r2_reachable,
+        r2_last_error=r2_last_error,
     )
 
 
@@ -163,7 +171,84 @@ def wifi_connect(request: Request, body: WifiConnectRequest) -> dict:
     config = store.ensure()
     config.wifi_ssid = result.ssid
     store.save(config)
-    return {"ok": True, "ssid": result.ssid}
+    check_cloud = getattr(request.app.state.upload_queue, "check_cloud_health", None)
+    reachable, cloud_error = (
+        check_cloud() if check_cloud and config.r2 else (None, None)
+    )
+    return {
+        "ok": True,
+        "ssid": result.ssid,
+        "r2_reachable": reachable,
+        "warning": cloud_error,
+    }
+
+
+@router.post("/admin/preflight")
+def admin_preflight(request: Request) -> dict:
+    """Prove the booth can capture persistently and deliver a guest strip."""
+    _require_admin(request)
+    errors: list[str] = []
+    warnings: list[str] = []
+    camera_ready = bool(request.app.state.camera.available)
+    degraded = data_degraded()
+    low = disk_low()
+    ssid = current_ssid()
+    if not camera_ready:
+        errors.append("Camera unavailable.")
+    if degraded:
+        errors.append("The writable photo partition is degraded; photos would be lost.")
+    if low:
+        errors.append(f"Storage almost full ({disk_free_mb()} MB free).")
+    if camera_ready and not degraded and not low:
+        try:
+            data_dir = Path(request.app.state.storage.db_path).parent
+            with tempfile.TemporaryDirectory(
+                prefix=".piccie-camera-preflight-",
+                dir=data_dir,
+            ) as directory:
+                test_photo = Path(directory) / "photo.jpg"
+                request.app.state.camera.capture_to_file(
+                    test_photo,
+                    label="Readiness check",
+                )
+                if not jpeg_is_intact(test_photo):
+                    raise RuntimeError("camera returned an incomplete image")
+        except Exception as exc:
+            camera_ready = False
+            errors.append(f"Camera capture test failed: {exc}")
+    if not ssid:
+        warnings.append("Wi-Fi is not connected.")
+
+    check_cloud = getattr(request.app.state.upload_queue, "check_cloud_health", None)
+    if not ssid:
+        r2_reachable, r2_error = False, "Wi-Fi is not connected."
+    else:
+        r2_reachable, r2_error = (
+            check_cloud() if check_cloud else (False, "Cloud readiness check unavailable.")
+        )
+    if not r2_reachable:
+        warnings.append(
+            f"Guest photo delivery is unavailable: {r2_error or 'unknown cloud error'}"
+        )
+    summary = request.app.state.storage.upload_summary()
+    if summary["failed"]:
+        warnings.append(
+            f"{summary['failed']} earlier photo upload(s) still need attention."
+        )
+    return {
+        "ready": not errors and bool(ssid) and bool(r2_reachable),
+        "capture_ready": not errors,
+        "camera_available": camera_ready,
+        "data_degraded": degraded,
+        "disk_low": low,
+        "wifi_ssid": ssid,
+        "r2_reachable": r2_reachable,
+        "r2_error": r2_error,
+        "upload_pending": summary["pending"],
+        "upload_failed": summary["failed"],
+        "errors": errors,
+        "warnings": warnings,
+    }
 
 
 @router.post("/onboarding/complete")
@@ -181,7 +266,7 @@ def onboarding_complete(request: Request, body: OnboardingCompleteRequest) -> di
         provision_booth(payload, data_dir=data_dir, store=store)
     except Exception as exc:
         raise HTTPException(400, str(exc) or "Could not connect to R2.") from exc
-    return {"ok": True}
+    return {"ok": True, "restarting": True}
 
 
 @router.get("/settings/camera")
@@ -569,15 +654,16 @@ def start_session(request: Request, event_id: str) -> SessionResponse:
         raise HTTPException(409, "This event has concluded. Edit its end time to launch it again.")
     if not request.app.state.camera.available:
         raise HTTPException(503, "Camera unavailable")
+    if data_degraded():
+        raise HTTPException(
+            503,
+            "Photo storage is degraded. Restart the booth and repair /data before taking photos.",
+        )
     if disk_low():
         raise HTTPException(
             507,
             f"Storage almost full ({disk_free_mb()} MB free). Delete old events to continue.",
         )
-    registry: TemplateRegistry = request.app.state.templates
-    template = registry.load(event.template_id)
-    crop_w, crop_h = preview_crop_aspect(template)
-    request.app.state.camera.set_crop_aspect(crop_w, crop_h)
     session = storage.create_session(event_id)
     return _session_response(session)
 
@@ -771,17 +857,10 @@ def camera_frame(request: Request):
 
 
 @router.get("/camera/preview")
-async def camera_preview(
-    request: Request,
-    w: int | None = None,
-    h: int | None = None,
-):
+async def camera_preview(request: Request):
     camera = request.app.state.camera
     if not camera.available:
         raise HTTPException(503, "Camera unavailable")
-    if w and h and w > 0 and h > 0:
-        camera.set_crop_aspect(w, h)
-
     async def stream():
         loop = asyncio.get_running_loop()
         chunk_queue: asyncio.Queue[bytes | None] = asyncio.Queue(maxsize=4)
@@ -833,6 +912,8 @@ def _session_response(session) -> SessionResponse:
         event_id=session.event_id,
         created_at=session.created_at,
         upload_status=session.upload_status,
+        upload_error=session.upload_error,
+        upload_attempts=session.upload_attempts,
         r2_strip_url=session.r2_strip_url,
         strip_local_url=strip_url,
         photo_local_urls=[

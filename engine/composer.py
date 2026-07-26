@@ -309,11 +309,6 @@ def photo_slot_size(template: Template, index: int = 0) -> tuple[int, int]:
     return metrics["slot_w"], metrics["slot_heights"][idx]
 
 
-def preview_crop_aspect(template: Template) -> tuple[int, int]:
-    """Aspect ratio used for live preview framing (matches first print slot)."""
-    return photo_slot_size(template, 0)
-
-
 def render_strip_image(
     template: Template,
     line1: str,

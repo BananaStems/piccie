@@ -94,6 +94,9 @@ class Session:
     r2_strip_url: str | None
     local_path: str
     upload_status: str
+    upload_error: str | None = None
+    upload_attempts: int = 0
+    upload_updated_at: str | None = None
 
 
 class Storage:
@@ -146,6 +149,7 @@ class Storage:
                 """
             )
             self._migrate_events(conn)
+            self._migrate_sessions(conn)
 
     def _migrate_events(self, conn: sqlite3.Connection) -> None:
         cols = {row[1] for row in conn.execute("PRAGMA table_info(events)")}
@@ -166,6 +170,25 @@ class Storage:
         # Sharing no longer needs them, so remove any retained personal data.
         if "host_email" in cols:
             conn.execute("UPDATE events SET host_email = ''")
+
+    def _migrate_sessions(self, conn: sqlite3.Connection) -> None:
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(sessions)")}
+        if "upload_error" not in cols:
+            conn.execute("ALTER TABLE sessions ADD COLUMN upload_error TEXT")
+        if "upload_attempts" not in cols:
+            conn.execute(
+                "ALTER TABLE sessions ADD COLUMN upload_attempts INTEGER NOT NULL DEFAULT 0"
+            )
+        if "upload_updated_at" not in cols:
+            conn.execute("ALTER TABLE sessions ADD COLUMN upload_updated_at TEXT")
+        conn.execute(
+            """
+            UPDATE sessions
+            SET upload_status = 'failed',
+                upload_error = COALESCE(upload_error, 'Cloud delivery was not configured.')
+            WHERE upload_status = 'skipped'
+            """
+        )
 
     def list_events(self) -> list[Event]:
         with self._connect() as conn:
@@ -195,17 +218,6 @@ class Storage:
         ends_at = ends_at or f"{date}T23:59:00"
         event_dir = self.events_dir / event_id
         event_dir.mkdir(parents=True, exist_ok=True)
-        meta = {
-            "id": event_id,
-            "name": name,
-            "line1": line1,
-            "line2": line2,
-            "date": date,
-            "ends_at": ends_at,
-            "date_separator": date_separator,
-            "template_id": template_id,
-        }
-        write_json_atomic(event_dir / "meta.json", meta)
         with self._connect() as conn:
             conn.execute(
                 """
@@ -258,18 +270,73 @@ class Storage:
             ).fetchall()
         return [self._row_to_session(row) for row in rows]
 
-    def update_session_upload(self, session_id: str, status: str, r2_strip_url: str | None = None) -> None:
+    def update_session_upload(
+        self,
+        session_id: str,
+        status: str,
+        r2_strip_url: str | None = None,
+        *,
+        error: str | None = None,
+        increment_attempt: bool = False,
+    ) -> None:
+        updated_at = datetime.now(timezone.utc).isoformat()
         with self._connect() as conn:
             if r2_strip_url:
                 conn.execute(
-                    "UPDATE sessions SET upload_status = ?, r2_strip_url = ? WHERE id = ?",
-                    (status, r2_strip_url, session_id),
+                    """
+                    UPDATE sessions
+                    SET upload_status = ?, r2_strip_url = ?, upload_error = ?,
+                        upload_updated_at = ?,
+                        upload_attempts = upload_attempts + ?
+                    WHERE id = ?
+                    """,
+                    (
+                        status,
+                        r2_strip_url,
+                        error,
+                        updated_at,
+                        int(increment_attempt),
+                        session_id,
+                    ),
                 )
             else:
                 conn.execute(
-                    "UPDATE sessions SET upload_status = ? WHERE id = ?",
-                    (status, session_id),
+                    """
+                    UPDATE sessions
+                    SET upload_status = ?, upload_error = ?, upload_updated_at = ?,
+                        upload_attempts = upload_attempts + ?
+                    WHERE id = ?
+                    """,
+                    (status, error, updated_at, int(increment_attempt), session_id),
                 )
+
+    def upload_summary(self) -> dict:
+        with self._connect() as conn:
+            counts = {
+                row["upload_status"]: row["count"]
+                for row in conn.execute(
+                    """
+                    SELECT upload_status, COUNT(*) AS count
+                    FROM sessions
+                    GROUP BY upload_status
+                    """
+                )
+            }
+            latest_error = conn.execute(
+                """
+                SELECT upload_error
+                FROM sessions
+                WHERE upload_error IS NOT NULL AND upload_error != ''
+                ORDER BY upload_updated_at DESC, created_at DESC
+                LIMIT 1
+                """
+            ).fetchone()
+        pending = sum(counts.get(status, 0) for status in ("pending", "uploading"))
+        return {
+            "pending": pending,
+            "failed": counts.get("failed", 0) + counts.get("corrupt", 0),
+            "last_error": latest_error["upload_error"] if latest_error else None,
+        }
 
     def update_event(
         self,
@@ -293,17 +360,6 @@ class Storage:
                 "UPDATE events SET name = ?, line1 = ?, line2 = ?, date = ?, ends_at = ?, date_separator = ?, template_id = ? WHERE id = ?",
                 (name, line1, line2, date, resolved_ends_at, date_separator, resolved_template_id, event_id),
             )
-        meta_path = self.events_dir / event_id / "meta.json"
-        if meta_path.exists():
-            meta = json.loads(meta_path.read_text())
-            meta["name"] = name
-            meta["line1"] = line1
-            meta["line2"] = line2
-            meta["date"] = date
-            meta["ends_at"] = resolved_ends_at
-            meta["date_separator"] = date_separator
-            meta["template_id"] = resolved_template_id
-            write_json_atomic(meta_path, meta)
         return Event(
             id=event_id,
             name=name,
@@ -332,14 +388,6 @@ class Storage:
         event = self.get_event(event_id)
         if not event:
             return None
-        meta_path = self.events_dir / event_id / "meta.json"
-        if meta_path.exists():
-            try:
-                meta = json.loads(meta_path.read_text())
-            except (OSError, json.JSONDecodeError):
-                meta = {"id": event_id}
-            meta["share_url"] = share_url
-            write_json_atomic(meta_path, meta)
         return event
 
     def clear_event_photos(self, event_id: str) -> tuple[bool, list[str]]:
@@ -348,7 +396,7 @@ class Storage:
             if not row:
                 return False, []
             session_rows = conn.execute(
-                "SELECT local_path FROM sessions WHERE event_id = ?",
+                "SELECT event_id, local_path FROM sessions WHERE event_id = ?",
                 (event_id,),
             ).fetchall()
             targets = self._collect_r2_targets(session_rows)
@@ -371,7 +419,7 @@ class Storage:
             if not row:
                 return False, []
             session_rows = conn.execute(
-                "SELECT local_path FROM sessions WHERE event_id = ?",
+                "SELECT event_id, local_path FROM sessions WHERE event_id = ?",
                 (event_id,),
             ).fetchall()
             targets = self._collect_r2_targets(session_rows)
@@ -388,12 +436,17 @@ class Storage:
         targets: list[str] = []
         for session_row in session_rows:
             meta_path = Path(session_row["local_path"]) / "meta.json"
+            meta: dict = {}
             try:
-                target = json.loads(meta_path.read_text()).get("r2_target")
+                meta = json.loads(meta_path.read_text())
+                target = meta.get("r2_target")
             except (OSError, json.JSONDecodeError):
                 target = None
             if target:
                 targets.append(target)
+            token = meta.get("share_token") if isinstance(meta, dict) else None
+            if token:
+                targets.append(f"event-share:{session_row['event_id']}:{token}")
         return list(dict.fromkeys(targets))
 
     @staticmethod
@@ -440,6 +493,12 @@ class Storage:
     def write_session_meta(self, session: Session, meta: dict) -> None:
         write_json_atomic(self.session_meta_path(session), meta)
 
+    def merge_session_meta(self, session: Session, patch: dict) -> dict:
+        meta = self.get_session_meta(session)
+        meta.update(patch)
+        self.write_session_meta(session, meta)
+        return meta
+
     def get_session_meta(self, session: Session) -> dict:
         path = self.session_meta_path(session)
         if not path.exists():
@@ -463,15 +522,17 @@ class Storage:
             session = self._row_to_session(row)
             session_dir = Path(session.local_path)
             strip = session_dir / "strip.jpg"
-            photos = [session_dir / f"photo-{i}.jpg" for i in range(1, 4)]
-            # Require every file present AND a structurally-intact strip: a strip
-            # truncated by a power yank must not be resumed forever (the rescan
-            # would otherwise re-enqueue this 'failed' session every 30s).
+            # R2 publishes only the composed strip. Source photos may already have
+            # been reclaimed; they are not required to resume a guest upload.
             if not strip.exists():
                 continue
-            if not jpeg_is_intact(strip) or not all(p.exists() for p in photos):
+            if not jpeg_is_intact(strip):
                 logger.warning("session %s output corrupt; marking terminal", session.id)
-                self.update_session_upload(session.id, "corrupt")
+                self.update_session_upload(
+                    session.id,
+                    "corrupt",
+                    error="The composed strip is missing or corrupt.",
+                )
                 continue
             sessions.append(session)
         return sessions
@@ -565,6 +626,7 @@ class Storage:
 
     @staticmethod
     def _row_to_session(row: sqlite3.Row) -> Session:
+        keys = row.keys()
         return Session(
             id=row["id"],
             event_id=row["event_id"],
@@ -572,4 +634,9 @@ class Storage:
             r2_strip_url=row["r2_strip_url"],
             local_path=row["local_path"],
             upload_status=row["upload_status"],
+            upload_error=row["upload_error"] if "upload_error" in keys else None,
+            upload_attempts=row["upload_attempts"] if "upload_attempts" in keys else 0,
+            upload_updated_at=(
+                row["upload_updated_at"] if "upload_updated_at" in keys else None
+            ),
         )

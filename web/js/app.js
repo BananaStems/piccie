@@ -194,10 +194,8 @@ function promptText({ title, value = "", placeholder = "", confirmLabel = "Save"
 
 let previewStreamUrl = null;
 
-function buildCameraPreviewUrl(template = getActiveTemplate()) {
-  const pw = template.photo_width || 600;
-  const ph = template.photo_height || 400;
-  return `${api.cameraPreviewUrl(pw, ph)}&t=${Date.now()}`;
+function buildCameraPreviewUrl() {
+  return `${api.cameraPreviewUrl()}?t=${Date.now()}`;
 }
 
 // Pause/resume only HIDE the live <img>; the MJPEG connection stays open so resume
@@ -470,7 +468,10 @@ function returnFromWifi() {
   const returningToResult = returnView === "party" && state.partyState === "result";
   state.wifiReturnView = null;
   state.view = returnView;
-  if (returningToResult) state.resultOffline = !state.status?.wifi_ssid;
+  if (returningToResult) {
+    state.resultOffline =
+      !state.status?.wifi_ssid || state.status?.r2_reachable === false;
+  }
   render();
   if (returningToResult) {
     startResultTimer();
@@ -483,7 +484,11 @@ function startAdminStatusPolling() {
     if (state.view !== "admin") return;
     const latest = await api.status().catch(() => null);
     if (!latest) return;
-    const connectionChanged = latest.wifi_ssid !== state.status?.wifi_ssid;
+    const connectionChanged =
+      latest.wifi_ssid !== state.status?.wifi_ssid ||
+      latest.r2_reachable !== state.status?.r2_reachable ||
+      latest.upload_pending !== state.status?.upload_pending ||
+      latest.upload_failed !== state.status?.upload_failed;
     state.status = latest;
     if (connectionChanged) render();
   }, 5000);
@@ -491,20 +496,20 @@ function startAdminStatusPolling() {
 
 async function enterParty(event, { persist = true } = {}) {
   if (persist) {
-    state.status = await api.status();
-    if (!state.status.wifi_ssid) {
-      const connectNow = await showConfirm({
-        title: "No Wi-Fi connection",
-        message: "Photos will stay on this booth, but uploads and guest downloads will wait until Wi-Fi returns.",
-        confirmLabel: "Connect to Wi-Fi",
-        cancelLabel: "Launch offline",
-      });
-      if (connectNow) {
-        state.view = "wifi";
-        render();
-        return;
-      }
+    const preflight = await api.preflight();
+    if (!preflight.capture_ready) {
+      throw new Error(preflight.errors.join(" ") || "The booth is not ready to take photos.");
     }
+    if (!preflight.ready) {
+      const launchOffline = await showConfirm({
+        title: "Guest delivery is not ready",
+        message: `${preflight.warnings.join(" ")} Photos will remain safely on this booth and upload automatically when the connection returns.`,
+        confirmLabel: "Launch offline",
+        cancelLabel: "Go back",
+      });
+      if (!launchOffline) return;
+    }
+    state.status = await api.status();
     await api.setActiveEvent(event.id);
     state.status.active_event_id = event.id;
   }
@@ -588,8 +593,8 @@ function renderParty() {
                 : state.resultOffline
                   ? `<div class="result-offline" role="status">
                       <span class="result-offline-icon" aria-hidden="true">${WIFI_OFFLINE_ICON}</span>
-                      <h2>We've lost the network connection</h2>
-                      <p>Don't worry. The event organiser can send you your photos later.</p>
+                      <h2>Guest download is temporarily unavailable</h2>
+                      <p>Your photo is safe on this booth and will upload automatically when cloud access returns.</p>
                     </div>`
                   : `<div class="spinner"></div><p class="subtitle">Uploading</p>`}
               ${state.resultOffline ? `<button class="result-reconnect" type="button" id="result-reconnect">Try reconnect</button>` : ""}
@@ -648,7 +653,7 @@ function mountCaptureShell(template) {
   state.captureShellMounted = true;
   state.partyState = "capturing";
   document.getElementById("booth-frame")?.classList.add("capture-active");
-  previewStreamUrl = buildCameraPreviewUrl(template);
+  previewStreamUrl = buildCameraPreviewUrl();
   previewReloadAttempts = 0;
   const preview = document.getElementById("live-preview");
   if (preview) {
@@ -788,7 +793,8 @@ async function finalizeSession() {
       ? `${window.location.origin}${session.strip_local_url}?t=${Date.now()}`
       : null;
     state.qrUrl = session.r2_strip_url || null;
-    state.resultOffline = !state.status?.wifi_ssid;
+    state.resultOffline =
+      !state.status?.wifi_ssid || state.status?.r2_reachable === false;
     state.partyState = "result";
     state.resultTimer = 120;
     renderParty();
@@ -905,7 +911,7 @@ function pollUpload() {
         renderParty();
         return;
       }
-      const offline = !status.wifi_ssid;
+      const offline = !status.wifi_ssid || status.r2_reachable === false;
       if (offline !== state.resultOffline) {
         state.resultOffline = offline;
         renderParty();

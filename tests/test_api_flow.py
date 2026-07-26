@@ -1,7 +1,7 @@
+import json
 import os
 import threading
 import zipfile
-import json
 from pathlib import Path
 
 import pytest
@@ -19,12 +19,16 @@ from engine.templates import TemplateRegistry
 
 class FakeUploadQueue:
     backlog = 0
+    cloud_health = (True, None)
 
     def enqueue_best_effort(self, _job):
         return True
 
     def retry_pending_deletions_async(self):
         return None
+
+    def check_cloud_health(self):
+        return self.cloud_health
 
 
 @pytest.fixture
@@ -55,7 +59,7 @@ def client(tmp_path, monkeypatch):
 def test_operator_auth_event_and_capture_flow(client):
     test_client, app = client
     status = test_client.get("/api/status").json()
-    assert status["version"] == "1.0.2"
+    assert status["version"] == "1.0.3"
     assert status["build"]
     app.state.config_store.set_admin_pin("2468")
     event_body = {
@@ -116,6 +120,43 @@ def test_concluded_event_cannot_launch_or_start_session(client):
     assert response.status_code == 409
     assert "concluded" in response.json()["detail"]
     assert test_client.post(f"/api/events/{event.id}/sessions").status_code == 409
+
+
+def test_degraded_storage_blocks_capture_session(client, monkeypatch):
+    test_client, app = client
+    event = app.state.storage.create_event("Wedding", "2026-08-01", "classic")
+    monkeypatch.setattr("engine.api.routes.data_degraded", lambda: True)
+
+    response = test_client.post(f"/api/events/{event.id}/sessions")
+
+    assert response.status_code == 503
+    assert "degraded" in response.json()["detail"]
+
+
+def test_preflight_checks_capture_and_guest_delivery(client, monkeypatch):
+    test_client, app = client
+    monkeypatch.setattr("engine.api.routes.current_ssid", lambda: "Venue")
+
+    ready = test_client.post("/api/admin/preflight").json()
+    assert ready["ready"] is True
+    assert ready["capture_ready"] is True
+    assert ready["r2_reachable"] is True
+
+    app.state.upload_queue.cloud_health = (False, "Worker unavailable")
+    not_ready = test_client.post("/api/admin/preflight").json()
+    assert not_ready["ready"] is False
+    assert not_ready["capture_ready"] is True
+    assert "Worker unavailable" in not_ready["warnings"][0]
+
+    monkeypatch.setattr(
+        app.state.camera,
+        "capture_to_file",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("sensor stalled")),
+    )
+    camera_failed = test_client.post("/api/admin/preflight").json()
+    assert camera_failed["capture_ready"] is False
+    assert camera_failed["camera_available"] is False
+    assert "sensor stalled" in camera_failed["errors"][0]
 
 
 def test_performance_mode_requires_matching_device_and_warning(client, monkeypatch):
@@ -266,7 +307,9 @@ def test_kiosk_onboarding_connects_wifi_then_saves_r2(client, monkeypatch, tmp_p
         },
     )
     assert completed.status_code == 200
+    assert completed.json()["restarting"] is True
     assert (tmp_path / ".provisioned").exists()
+    assert (tmp_path / ".lockdown-requested").exists()
     assert (tmp_path / "ssh" / "authorized_keys").read_text() == "ssh-ed25519 AAAATEST operator\n"
     assert app.state.config_store.ensure().r2.bucket == "photo-strips"
     assert test_client.post("/api/admin/unlock", json={"pin": "2468"}).status_code == 200

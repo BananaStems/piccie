@@ -106,7 +106,7 @@ def _try_open_webcam(cv2, device: int):
     return None
 
 
-def _resolve_webcam_device(cv2) -> tuple[int, object]:
+def _resolve_webcam(cv2):
     preferred = os.environ.get("PICCIE_WEBCAM_DEVICE", "").strip()
     candidates: list[int] = []
     if preferred:
@@ -116,7 +116,7 @@ def _resolve_webcam_device(cv2) -> tuple[int, object]:
     for device in candidates:
         cap = _try_open_webcam(cv2, device)
         if cap is not None:
-            return device, cap
+            return cap
         errors.append(str(device))
     raise RuntimeError(f"No webcam available (tried devices: {', '.join(errors)})")
 
@@ -147,7 +147,7 @@ class WebcamBackend:
         import cv2
 
         self._cv2 = cv2
-        self._device, self._cap = _resolve_webcam_device(cv2)
+        self._cap = _resolve_webcam(cv2)
         self._preview_size = preview_size()
 
     def _read_rgb_image(self) -> Image.Image:
@@ -174,7 +174,7 @@ class WebcamBackend:
 
     def _reopen(self) -> None:
         self._cap.release()
-        self._device, self._cap = _resolve_webcam_device(self._cv2)
+        self._cap = _resolve_webcam(self._cv2)
 
     def close(self) -> None:
         self._cap.release()
@@ -341,7 +341,6 @@ class CameraService:
         self._preview_failures = 0
         self._preview_interval = 1 / preview_fps()
         self._preview_size = preview_size()
-        self._crop_aspect: tuple[int, int] | None = None
         self._save_timer: threading.Timer | None = None
         self._save_lock = threading.Lock()
         self._init_camera()
@@ -427,29 +426,6 @@ class CameraService:
         self.apply_settings(CameraSettings())
         self._settings.save()
         return self._settings
-
-    def set_crop_aspect(self, width: int, height: int) -> None:
-        with self._frame_lock:
-            self._crop_aspect = (width, height)
-            self._latest_jpeg = None
-
-    def clear_crop_aspect(self) -> None:
-        with self._frame_lock:
-            self._crop_aspect = None
-            self._latest_jpeg = None
-
-    def _preview_output_size(self) -> tuple[int, int]:
-        max_w, max_h = self._preview_size
-        if not self._crop_aspect:
-            return max_w, max_h
-        aspect_w, aspect_h = self._crop_aspect
-        if aspect_w / aspect_h >= max_w / max_h:
-            width = max_w
-            height = max(1, int(max_w * aspect_h / aspect_w))
-        else:
-            height = max_h
-            width = max(1, int(max_h * aspect_w / aspect_h))
-        return width, height
 
     def _prepare_preview_jpeg(self, img: Image.Image) -> bytes:
         # No server-side crop: the browser crops the preview <img> to the photo-slot
@@ -581,16 +557,17 @@ class CameraService:
         try:
             with self._camera_lock:
                 jpeg = self._capture_still_jpeg(label)
-        except TimeoutError:
-            self._restart_for_camera_failure("still capture timed out")
+        except Exception as exc:
+            if self._mode == "picamera":
+                self._restart_for_camera_failure(
+                    f"still capture failed: {type(exc).__name__}: {exc}"
+                )
+            raise
         finally:
             self._capture_pending.clear()
         # Atomic + fsync: a power yank right after a capture must not leave a
         # truncated photo that later uploads to R2 as a broken image.
         write_bytes_atomic(path, jpeg)
-
-    def generate_preview_frame(self) -> bytes:
-        return self.get_preview_jpeg()
 
     def add_viewer(self) -> None:
         with self._frame_cond:
