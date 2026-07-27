@@ -374,6 +374,19 @@ test_provisioning_triggers_one_time_lockdown() {
   assert_contains "${script}" "systemctl reboot"
 }
 
+test_safe_shutdown_uses_narrow_privileged_helper() {
+  local setup="${REPO_ROOT}/image/setup-appliance.sh"
+  local helper="${REPO_ROOT}/image/piccie-shutdown"
+  local sudoers="${REPO_ROOT}/image/files/piccie-shutdown-sudoers"
+
+  assert_contains "${setup}" "install -m 755 \"\${INSTALL_DIR}/image/piccie-shutdown\" /usr/local/sbin/piccie-shutdown"
+  assert_contains "${setup}" "visudo -cf /etc/sudoers.d/piccie-shutdown"
+  assert_contains "${helper}" "sync"
+  assert_contains "${helper}" "/usr/bin/systemctl poweroff"
+  assert_contains "${sudoers}" "NOPASSWD: /usr/local/sbin/piccie-shutdown"
+  assert_not_contains "${sudoers}" "/usr/bin/systemctl"
+}
+
 run_test() {
   local name="$1"
   "$name"
@@ -398,5 +411,6 @@ run_test test_success_clears_stale_failure_marker
 run_test test_filesystem_resize_must_verify
 run_test test_systemd_ordering_keeps_growth_offline
 run_test test_provisioning_triggers_one_time_lockdown
+run_test test_safe_shutdown_uses_narrow_privileged_helper
 
 echo "PASS: ${PASS_COUNT} piccie-grow-data tests"

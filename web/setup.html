@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="referrer" content="no-referrer" />
+  <meta http-equiv="Content-Security-Policy"
+    content="default-src 'self'; connect-src 'self'; font-src 'self'; img-src 'self' data:; script-src 'self'; style-src 'self'; base-uri 'none'; form-action 'self'" />
+  <title>Set up Piccie</title>
+  <link rel="stylesheet" href="/css/setup.css" />
+</head>
+<body>
+  <main class="setup-shell">
+    <header>
+      <img src="/assets/piccie-wordmark.svg" alt="Piccie" />
+      <span>One-time booth setup</span>
+    </header>
+
+    <section class="setup-card" id="setup-loading">
+      <div class="spinner" aria-hidden="true"></div>
+      <h1>Connecting to your booth</h1>
+      <p id="setup-loading-message" role="status">Checking the one-time setup link…</p>
+    </section>
+
+    <section class="setup-card" id="setup-form-card" hidden>
+      <p class="eyebrow">Connected to <strong id="setup-wifi"></strong></p>
+      <h1>Connect Cloudflare R2</h1>
+      <p>Enter the credentials for the private bucket and gallery Worker used by this booth.</p>
+      <p>Use a trusted private Wi-Fi network. This direct local connection uses HTTP.</p>
+
+      <form id="setup-form">
+        <label>
+          Account ID
+          <input name="account_id" autocomplete="off" maxlength="64" required />
+        </label>
+        <label>
+          Bucket
+          <input name="bucket" autocomplete="off" autocapitalize="none"
+            pattern="[a-z0-9][a-z0-9-]{1,61}[a-z0-9]" required />
+        </label>
+        <label>
+          Access Key ID
+          <input name="access_key" autocomplete="off" autocapitalize="none" required />
+        </label>
+        <label>
+          Secret Access Key
+          <span class="secret-field">
+            <input name="secret_key" type="password" autocomplete="off" autocapitalize="none" required />
+            <button type="button" id="setup-secret-toggle">Show</button>
+          </span>
+        </label>
+        <label>
+          Gallery Worker URL
+          <input name="public_base_url" type="url" inputmode="url" autocomplete="off"
+            autocapitalize="none" placeholder="https://piccie-gallery.example.workers.dev" required />
+        </label>
+        <label>
+          Jurisdiction
+          <select name="jurisdiction">
+            <option value="default">Default</option>
+            <option value="eu">European Union</option>
+            <option value="fedramp">FedRAMP</option>
+          </select>
+        </label>
+
+        <hr />
+
+        <h2>Secure the booth</h2>
+        <label>
+          Operator PIN
+          <input name="admin_pin" type="password" inputmode="numeric" autocomplete="new-password"
+            pattern="[0-9]{4,8}" minlength="4" maxlength="8" required />
+          <small>Use 4–8 digits.</small>
+        </label>
+        <label>
+          Confirm PIN
+          <input name="confirm_pin" type="password" inputmode="numeric" autocomplete="new-password"
+            pattern="[0-9]{4,8}" minlength="4" maxlength="8" required />
+        </label>
+        <label>
+          SSH public key <span class="optional">Optional</span>
+          <textarea name="ssh_authorized_key" rows="3" maxlength="1000"
+            autocomplete="off" autocapitalize="none" placeholder="ssh-ed25519 …"></textarea>
+          <small>Add this if you want to install future updates without reflashing.</small>
+        </label>
+
+        <p class="form-message" id="setup-message" role="status"></p>
+        <button class="primary" id="setup-submit" type="submit">Check connection and finish</button>
+      </form>
+    </section>
+
+    <section class="setup-card setup-result" id="setup-result" hidden>
+      <div class="result-mark" aria-hidden="true">✓</div>
+      <h1>Setup complete</h1>
+      <p>Piccie is restarting to secure the operating system. Keep the booth powered on until its admin screen appears.</p>
+    </section>
+  </main>
+  <script type="module" src="/js/setup.js"></script>
+</body>
+</html>

@@ -7,6 +7,7 @@ import secrets
 import socket
 import tempfile
 import threading
+import time
 import zipfile
 from pathlib import Path
 
@@ -46,6 +47,7 @@ from engine.performance import (
     detected_memory_gb,
     performance_available,
 )
+from engine.power import schedule_poweroff
 from engine.provisioning import provision_booth
 from engine.r2 import R2Uploader
 from engine.storage import data_degraded, disk_free_mb, disk_low
@@ -56,6 +58,7 @@ from engine.version import APP_VERSION, BUILD_ID
 from engine.wifi import connect_network, current_ssid, list_networks
 
 router = APIRouter(prefix="/api")
+SETUP_PAIRING_TTL_SECONDS = 15 * 60
 
 
 def _ready_config(request: Request) -> AppConfig:
@@ -80,6 +83,28 @@ def _require_studio(request: Request) -> None:
         raise HTTPException(401, "This Studio link is no longer active. Create a new one on the booth.")
 
 
+def _onboarding_data_dir() -> Path:
+    return Path(os.environ.get("PICCIE_ONBOARDING_DATA_DIR", "/data"))
+
+
+def _onboarding_pending() -> bool:
+    return not (_onboarding_data_dir() / ".provisioned").exists()
+
+
+def _require_setup_pairing(request: Request) -> dict:
+    token = request.headers.get("X-Setup-Token", "")
+    pairing = getattr(request.app.state, "onboarding_pairing", None)
+    if not _onboarding_pending():
+        request.app.state.onboarding_pairing = None
+        raise HTTPException(409, "This booth is already configured.")
+    if not pairing or not token or not secrets.compare_digest(token, pairing["token"]):
+        raise HTTPException(401, "This setup link is no longer active. Scan a new code on the booth.")
+    if time.monotonic() >= pairing["expires_at"]:
+        request.app.state.onboarding_pairing = None
+        raise HTTPException(401, "This setup link has expired. Scan a new code on the booth.")
+    return pairing
+
+
 def _lan_ip() -> str:
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
@@ -89,6 +114,27 @@ def _lan_ip() -> str:
         return "127.0.0.1"
     finally:
         sock.close()
+
+
+def _complete_onboarding(request: Request, body: OnboardingCompleteRequest) -> dict:
+    data_dir = _onboarding_data_dir()
+    lock = getattr(request.app.state, "onboarding_lock", None)
+    if lock is None:
+        lock = request.app.state.onboarding_lock = threading.Lock()
+    with lock:
+        if (data_dir / ".provisioned").exists():
+            raise HTTPException(409, "This booth is already configured.")
+        store: ConfigStore = request.app.state.config_store
+        ssid = current_ssid()
+        if not ssid:
+            raise HTTPException(400, "Connect the booth to Wi-Fi first.")
+        payload = body.model_dump(mode="json")
+        payload["wifi_ssid"] = ssid
+        try:
+            provision_booth(payload, data_dir=data_dir, store=store)
+        except Exception as exc:
+            raise HTTPException(400, str(exc) or "Could not connect to R2.") from exc
+    return {"ok": True, "restarting": True}
 
 
 @router.get("/status", response_model=StatusResponse)
@@ -253,20 +299,53 @@ def admin_preflight(request: Request) -> dict:
 
 @router.post("/onboarding/complete")
 def onboarding_complete(request: Request, body: OnboardingCompleteRequest) -> dict:
-    data_dir = Path(os.environ.get("PICCIE_ONBOARDING_DATA_DIR", "/data"))
-    if (data_dir / ".provisioned").exists():
+    return _complete_onboarding(request, body)
+
+
+@router.post("/onboarding/pair")
+def pair_phone_onboarding(request: Request) -> dict:
+    if not _onboarding_pending():
         raise HTTPException(409, "This booth is already configured.")
-    store: ConfigStore = request.app.state.config_store
     ssid = current_ssid()
     if not ssid:
         raise HTTPException(400, "Connect the booth to Wi-Fi first.")
-    payload = body.model_dump(mode="json")
-    payload["wifi_ssid"] = ssid
-    try:
-        provision_booth(payload, data_dir=data_dir, store=store)
-    except Exception as exc:
-        raise HTTPException(400, str(exc) or "Could not connect to R2.") from exc
-    return {"ok": True, "restarting": True}
+    host = _lan_ip()
+    if host == "127.0.0.1":
+        raise HTTPException(503, "Could not determine this booth's Wi-Fi address.")
+    token = secrets.token_urlsafe(32)
+    request.app.state.onboarding_pairing = {
+        "token": token,
+        "expires_at": time.monotonic() + SETUP_PAIRING_TTL_SECONDS,
+    }
+    return {
+        "url": f"http://{host}:8080/setup.html#token={token}",
+        "wifi_ssid": ssid,
+        "expires_in": SETUP_PAIRING_TTL_SECONDS,
+    }
+
+
+@router.delete("/onboarding/pair")
+def revoke_phone_onboarding(request: Request) -> dict:
+    request.app.state.onboarding_pairing = None
+    return {"ok": True}
+
+
+@router.get("/setup/status")
+def phone_setup_status(request: Request) -> dict:
+    pairing = _require_setup_pairing(request)
+    return {
+        "ok": True,
+        "wifi_ssid": current_ssid(),
+        "expires_in": max(0, int(pairing["expires_at"] - time.monotonic())),
+    }
+
+
+@router.post("/setup/complete")
+def phone_setup_complete(request: Request, body: OnboardingCompleteRequest) -> dict:
+    _require_setup_pairing(request)
+    result = _complete_onboarding(request, body)
+    request.app.state.onboarding_pairing = None
+    return result
 
 
 @router.get("/settings/camera")
@@ -327,6 +406,16 @@ def update_performance_settings(
         raise HTTPException(500, str(exc)) from exc
     request.app.state.config_store.set_performance(body.device, body.mode)
     return {"ok": True, "restarting": True}
+
+
+@router.post("/system/shutdown")
+def shutdown_system(request: Request) -> dict:
+    _require_admin(request)
+    try:
+        schedule_poweroff()
+    except RuntimeError as exc:
+        raise HTTPException(500, str(exc)) from exc
+    return {"ok": True, "shutting_down": True}
 
 
 def _event_response(event) -> EventResponse:

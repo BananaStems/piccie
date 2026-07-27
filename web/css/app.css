@@ -584,6 +584,29 @@ input[type="date"]::-webkit-calendar-picker-indicator {
   flex-shrink: 0;
 }
 
+.power-chip .wifi-chip-icon {
+  color: var(--danger);
+}
+
+.power-chip:disabled {
+  opacity: 0.55;
+}
+
+.shutdown-screen {
+  gap: var(--space-4);
+  text-align: center;
+}
+
+.shutdown-screen h1 {
+  font-size: var(--font-display);
+}
+
+.shutdown-screen p {
+  max-width: 38ch;
+  margin: 0;
+  color: var(--muted);
+}
+
 .event-grid {
   flex: 1;
   min-height: 0;
@@ -1032,6 +1055,42 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 
 .onboarding-panel-head h2 {
   font-size: var(--font-md);
+}
+
+.onboarding-pairing {
+  min-height: 100%;
+  display: grid;
+  grid-template-columns: 190px minmax(0, 1fr);
+  align-items: center;
+  gap: var(--space-5);
+}
+
+.onboarding-pair-qr {
+  width: 190px;
+  height: 190px;
+  padding: var(--space-2);
+  border-radius: var(--radius-sm);
+  background: #fff;
+}
+
+.onboarding-pair-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.onboarding-pair-copy p,
+.onboarding-pair-copy span {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--font-sm);
+}
+
+.onboarding-pair-copy code {
+  overflow-wrap: anywhere;
+  color: var(--text);
+  font-size: var(--font-xs);
 }
 
 .text-button {

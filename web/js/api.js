@@ -78,6 +78,14 @@ export const api = {
       body: JSON.stringify(data),
       timeoutMs: 420000,
     }),
+  pairOnboarding: () =>
+    request("/onboarding/pair", {
+      method: "POST",
+    }),
+  revokeOnboardingPairing: () =>
+    request("/onboarding/pair", {
+      method: "DELETE",
+    }),
   preflight: () => request("/admin/preflight", { method: "POST", timeoutMs: 420000 }),
   getCameraSettings: () => request("/settings/camera"),
   updateCameraSettings: (patch) =>
@@ -86,6 +94,7 @@ export const api = {
   getPerformanceSettings: () => request("/settings/performance"),
   updatePerformanceSettings: (data) =>
     request("/settings/performance", { method: "PUT", body: JSON.stringify(data) }),
+  shutdown: () => request("/system/shutdown", { method: "POST" }),
   startSession: (eventId) =>
     request(`/events/${eventId}/sessions`, { method: "POST", timeoutMs: 20000 }),
   capture: (sessionId, index) =>

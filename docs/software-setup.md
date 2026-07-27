@@ -155,17 +155,25 @@ remove power or the card during that restart.
 
 1. Insert the flashed microSD card and power on the booth.
 2. Choose the Wi-Fi network used for initial setup.
-3. Select Cloudflare R2 as the storage provider.
-4. Enter the bucket credentials and Worker URL created with the
-   [self-hosted gallery guide](../cloud/README.md).
+3. Scan the one-time QR code with a phone or computer connected to the same
+   Wi-Fi. The code uses the booth's current IP address, expires after 15
+   minutes and contains no Cloudflare credentials.
+4. On that device, enter the bucket credentials and Worker URL created with
+   the [self-hosted gallery guide](../cloud/README.md).
 5. Choose an operator PIN.
 6. Add your computer's SSH public key if you want remote updates and access to
-   the soak test.
+   the soak test, then finish setup. You can select **Enter on booth** instead
+   if the Wi-Fi prevents devices from communicating with each other.
 
 Piccie uploads a temporary private strip and downloads it through the guest
 Worker before completing onboarding. It then restarts once more to enable the
 read-only system protection. Keep power connected until the admin screen
-appears. The bucket remains private and no custom domain is required.
+appears. The phone link becomes invalid as soon as setup succeeds. The bucket
+remains private and no custom domain is required.
+
+Guest or venue Wi-Fi may enable client isolation, which blocks the phone from
+reaching the booth even when both show the same network name. Use a private
+router/hotspot for setup or enter the details on the booth in that case.
 
 ## 4. Check the booth
 
@@ -178,6 +186,9 @@ Before a long reliability run:
 5. Disconnect Wi-Fi, take another strip, then reconnect and confirm the queued
    upload completes.
 6. Check the camera framing, light, cooling fan and touchscreen response.
+7. From the operator menu, select **Power**, confirm **Shut down**, and wait
+   until the display is black and the green activity light has stopped before
+   disconnecting power. Avoid unplugging a running booth.
 
 ## 5. Run the soak test
 
@@ -215,12 +226,14 @@ If an SSH key was added during onboarding, most app and interface changes can
 be installed without reflashing:
 
 ```bash
-./scripts/deploy.sh pi@piccie.local
+./scripts/deploy.sh 192.168.1.145
 ```
 
 The update switches releases atomically and rolls back if its health check
 fails. Changes to Raspberry Pi OS, Python dependencies, system services or the
-partition layout still require a rebuilt image and a reflash.
+partition layout still require a rebuilt image and a reflash. SSH password
+login is disabled: the public key must already have been added during
+onboarding.
 
 ## Local development
 

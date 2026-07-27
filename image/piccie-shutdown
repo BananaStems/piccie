@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Flush writable storage, then power off after the API has time to reply.
+set -euo pipefail
+
+if [[ "$(id -u)" -ne 0 ]]; then
+  echo "piccie-shutdown must run as root" >&2
+  exit 2
+fi
+
+sync
+systemd-run \
+  --quiet \
+  --unit="piccie-poweroff-$$" \
+  --on-active=3s \
+  /usr/bin/systemctl poweroff

@@ -1,6 +1,7 @@
 const SETTINGS_ICON = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.2"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V15z"/></svg>';
 const WIFI_ICON = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M4.5 12a11 11 0 0 1 15 0"/><path d="M8 15.5a6 6 0 0 1 8 0"/><path d="M12 19h.01"/></svg>';
 const TEMPLATE_ICON = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M7 7h10M7 11h10M8 16h8"/></svg>';
+const POWER_ICON = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 2v10"/><path d="M6.3 5.7a8 8 0 1 0 11.4 0"/></svg>';
 
 export function renderAdminScreen({
   app,
@@ -10,6 +11,7 @@ export function renderAdminScreen({
   escapeHtml,
   formatDate,
   promptText,
+  showConfirm,
   defaultTemplateIndex,
   templateIndexForId,
   enterParty,
@@ -67,6 +69,10 @@ export function renderAdminScreen({
           <span class="wifi-chip-icon" aria-hidden="true">${WIFI_ICON}</span>
           <span class="wifi-chip-label">${escapeHtml(wifiLabel)}</span>
         </button>
+        <button class="wifi-chip power-chip" type="button" id="shutdown-btn" aria-label="Safely shut down Piccie">
+          <span class="wifi-chip-icon" aria-hidden="true">${POWER_ICON}</span>
+          <span class="wifi-chip-label">Power</span>
+        </button>
       </nav>
     </div>`;
 
@@ -81,6 +87,25 @@ export function renderAdminScreen({
   document.getElementById("templates-btn")?.addEventListener("click", () => {
     state.view = "templates";
     render();
+  });
+  document.getElementById("shutdown-btn")?.addEventListener("click", async (event) => {
+    const button = event.currentTarget;
+    const confirmed = await showConfirm({
+      title: "Shut down Piccie?",
+      message: "Piccie will finish pending writes and power off safely. Do not unplug it until the screen is black and the green activity light has stopped.",
+      confirmLabel: "Shut down",
+      danger: true,
+    });
+    if (!confirmed) return;
+    button.disabled = true;
+    try {
+      await api.shutdown();
+      state.view = "shutting-down";
+      render();
+    } catch (error) {
+      button.disabled = false;
+      alert(error.message);
+    }
   });
   document.getElementById("new-event-btn")?.addEventListener("click", async () => {
     const name = await promptText({ title: "Name your event", confirmLabel: "Create" });
