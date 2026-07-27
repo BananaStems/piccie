@@ -30,6 +30,9 @@ install -m 755 "${INSTALL_DIR}/image/piccie-update.sh" /usr/local/sbin/piccie-up
 install -m 755 "${INSTALL_DIR}/image/piccie-performance" /usr/local/sbin/piccie-performance
 install -m 440 "${INSTALL_DIR}/image/files/piccie-performance-sudoers" /etc/sudoers.d/piccie-performance
 visudo -cf /etc/sudoers.d/piccie-performance >/dev/null
+install -m 755 "${INSTALL_DIR}/image/piccie-shutdown" /usr/local/sbin/piccie-shutdown
+install -m 440 "${INSTALL_DIR}/image/files/piccie-shutdown-sudoers" /etc/sudoers.d/piccie-shutdown
+visudo -cf /etc/sudoers.d/piccie-shutdown >/dev/null
 install -m 644 "${INSTALL_DIR}/image/piccie-bootdiag.service" /etc/systemd/system/
 install -m 755 "${INSTALL_DIR}/image/bootdiag.sh" /usr/local/bin/piccie-bootdiag
 

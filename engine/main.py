@@ -43,6 +43,8 @@ async def lifespan(app: FastAPI):
     # for the operator PIN before exposing settings again.
     app.state.admin_tokens = set()
     app.state.template_pairings = {}
+    app.state.onboarding_pairing = None
+    app.state.onboarding_lock = threading.Lock()
     storage = Storage()
     app.state.storage = storage
     app.state.templates = TemplateRegistry()
@@ -78,14 +80,22 @@ def lan_request_allowed(host: str, path: str) -> bool:
     except ValueError:
         if host == "testclient":
             return True
-    exact = {"/studio.html", "/css/studio.css", "/js/studio.js"}
-    prefixes = ("/fonts/", "/api/studio/")
+    exact = {
+        "/studio.html",
+        "/setup.html",
+        "/css/studio.css",
+        "/css/setup.css",
+        "/js/studio.js",
+        "/js/setup.js",
+        "/assets/piccie-wordmark.svg",
+    }
+    prefixes = ("/fonts/", "/api/studio/", "/api/setup/")
     return path in exact or path.startswith(prefixes)
 
 
 @app.middleware("http")
 async def restrict_lan_surface(request, call_next):
-    """Only the paired phone Studio is reachable from venue Wi-Fi."""
+    """Only token-protected phone tools are reachable from venue Wi-Fi."""
     host = request.client.host if request.client else ""
     if not lan_request_allowed(host, request.url.path):
         return PlainTextResponse("Not found", status_code=404)

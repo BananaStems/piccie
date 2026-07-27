@@ -33,6 +33,8 @@ const state = {
   wifiReturnView: null,
   onboardingStep: "wifi",
   onboardingR2: null,
+  onboardingPairing: null,
+  onboardingPairPolling: false,
   editingEvent: null,
   galleryEvent: null,
   gallerySessions: [],
@@ -420,11 +422,20 @@ function render() {
         escapeHtml,
         formatDate: isoToDisplay,
         promptText,
+        showConfirm,
         defaultTemplateIndex: () => defaultTemplateIndex(state),
         templateIndexForId: (templateId) => templateIndexForId(state, templateId),
         enterParty,
       });
       startAdminStatusPolling();
+      break;
+    case "shutting-down":
+      app.innerHTML = `
+        <div class="screen centered shutdown-screen">
+          <div class="spinner"></div>
+          <h1>Shutting down safely</h1>
+          <p>Wait until the screen is black and the green activity light has stopped before unplugging Piccie.</p>
+        </div>`;
       break;
     case "locked":
       renderAdminLock();

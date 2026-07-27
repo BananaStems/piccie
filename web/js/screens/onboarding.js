@@ -2,7 +2,7 @@ export function renderOnboardingScreen({ app, state, render, api, escapeHtml, lo
   state.onboardingStep ||= "wifi";
 
   const shell = (step, title, copy, content, actions = "") => {
-    const stepNumber = { wifi: 1, providers: 2, r2: 2, booth: 3 }[step];
+    const stepNumber = { wifi: 1, pair: 2, providers: 2, r2: 2, booth: 3 }[step];
     app.innerHTML = `
       <div class="screen onboarding-screen">
         <header class="onboarding-header">
@@ -124,7 +124,7 @@ export function renderOnboardingScreen({ app, state, render, api, escapeHtml, lo
       const selected = state.wifiNetworks.find((network) => network.ssid === state.wifiSelected);
       if (selected?.connected) {
         closeOnScreenKeyboard();
-        state.onboardingStep = "providers";
+        state.onboardingStep = "pair";
         render();
         return;
       }
@@ -148,7 +148,7 @@ export function renderOnboardingScreen({ app, state, render, api, escapeHtml, lo
           button.removeAttribute("aria-busy");
           return;
         }
-        state.onboardingStep = "providers";
+        state.onboardingStep = "pair";
         render();
       } catch (error) {
         message.className = "wifi-msg onboarding-wifi-message error";
@@ -161,6 +161,67 @@ export function renderOnboardingScreen({ app, state, render, api, escapeHtml, lo
       }
     };
     loadNetworks();
+  };
+
+  const leavePairing = async (nextStep) => {
+    try {
+      await api.revokeOnboardingPairing();
+    } catch {
+      // The code expires quickly and a new one always replaces it.
+    }
+    state.onboardingPairing = null;
+    state.onboardingStep = nextStep;
+    render();
+  };
+
+  const showPair = () => {
+    if (!state.onboardingPairing) {
+      shell(
+        "pair",
+        "Continue on your phone",
+        "Piccie is creating a private setup link for this booth.",
+        `<div class="centered"><div class="spinner"></div><p class="onboarding-submit-message" id="onboarding-pair-message">Creating setup code…</p></div>`,
+        `<button class="btn btn-secondary" type="button" id="onboarding-pair-back">Back</button>
+         <button class="btn btn-secondary" type="button" id="onboarding-pair-local">Enter on booth</button>`,
+      );
+      document.getElementById("onboarding-pair-back").onclick = () => leavePairing("wifi");
+      document.getElementById("onboarding-pair-local").onclick = () => leavePairing("providers");
+      api.pairOnboarding().then((pairing) => {
+        if (state.onboardingStep !== "pair") return;
+        state.onboardingPairing = pairing;
+        render();
+      }).catch((error) => {
+        const message = document.getElementById("onboarding-pair-message");
+        if (!message) return;
+        message.className = "onboarding-submit-message error-text";
+        message.textContent = error.message;
+      });
+      return;
+    }
+
+    const pairing = state.onboardingPairing;
+    shell(
+      "pair",
+      "Continue on your phone",
+      `Scan this code with a device connected to ${escapeHtml(pairing.wifi_ssid)}. The private link expires in 15 minutes.`,
+      `<div class="onboarding-pairing">
+          <img class="onboarding-pair-qr" src="/api/qr?data=${encodeURIComponent(pairing.url)}" alt="QR code for phone setup" />
+          <div class="onboarding-pair-copy">
+            <p>Cloudflare credentials stay out of the QR code. The code only contains a one-time link to this booth.</p>
+            <span>If scanning fails, enter the full one-time address:</span>
+            <code>${escapeHtml(pairing.url)}</code>
+          </div>
+        </div>`,
+      `<button class="btn btn-secondary" type="button" id="onboarding-pair-back">Back</button>
+       <button class="btn btn-secondary" type="button" id="onboarding-pair-local">Enter on booth</button>
+       <button class="btn" type="button" id="onboarding-pair-new">New code</button>`,
+    );
+    document.getElementById("onboarding-pair-back").onclick = () => leavePairing("wifi");
+    document.getElementById("onboarding-pair-local").onclick = () => leavePairing("providers");
+    document.getElementById("onboarding-pair-new").onclick = () => {
+      state.onboardingPairing = null;
+      render();
+    };
   };
 
   const showProviders = () => {
@@ -184,7 +245,7 @@ export function renderOnboardingScreen({ app, state, render, api, escapeHtml, lo
       render();
     };
     document.getElementById("onboarding-provider-back").onclick = () => {
-      state.onboardingStep = "wifi";
+      state.onboardingStep = "pair";
       render();
     };
   };
@@ -299,6 +360,7 @@ export function renderOnboardingScreen({ app, state, render, api, escapeHtml, lo
 
   ({
     wifi: showWifi,
+    pair: showPair,
     providers: showProviders,
     r2: showR2,
     finish: showFinish,

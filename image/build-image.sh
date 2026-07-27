@@ -201,7 +201,7 @@ if [[ -n "${IMG_PATH}" && -f "${IMG_PATH}" ]]; then
   echo "Flash this file to your SD card:"
   echo "  ${IMG_PATH}"
   echo ""
-  echo "First boot opens Wi-Fi and storage setup on the booth touchscreen."
+  echo "First boot connects Wi-Fi, then shows a one-time QR for phone setup."
 else
   echo "Build finished; check ${PI_GEN_DIR}/deploy/ for output images."
 fi

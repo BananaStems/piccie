@@ -82,6 +82,10 @@ if [[ "${HEALTHY}" != true ]]; then
   exit 4
 fi
 
+# Chromium can keep running the old JavaScript after the atomic release switch.
+# The openbox loop relaunches it against the now-healthy engine.
+pkill -f "chromium.*--app=http://localhost:8080" 2>/dev/null || true
+
 rm -f -- "${ARCHIVE}"
 echo "installed ${RELEASE_ID}"
 

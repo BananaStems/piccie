@@ -29,8 +29,9 @@ service.
    Keep the resulting `https://piccie-gallery.<account>.workers.dev` URL.
 
 4. In Cloudflare R2, create an Object Read & Write API token restricted to the
-   `piccie-photos` bucket. Enter its S3 credentials and the Worker URL during
-   booth onboarding.
+   `piccie-photos` bucket. After the booth connects to Wi-Fi, scan its one-time
+   setup QR and enter the S3 credentials and Worker URL on your phone or
+   computer.
 
 Keep the bucket private. The Worker only exposes objects after validating a
 random share token created by the booth. Disable or regenerate a link from the

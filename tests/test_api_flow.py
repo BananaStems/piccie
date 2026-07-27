@@ -48,6 +48,8 @@ def client(tmp_path, monkeypatch):
     app.state.upload_queue = FakeUploadQueue()
     app.state.finalize_lock = threading.Lock()
     app.state.admin_tokens = set()
+    app.state.onboarding_pairing = None
+    app.state.onboarding_lock = threading.Lock()
     app.state.kiosk_watchdog = None
     try:
         with TestClient(app) as test_client:
@@ -59,7 +61,7 @@ def client(tmp_path, monkeypatch):
 def test_operator_auth_event_and_capture_flow(client):
     test_client, app = client
     status = test_client.get("/api/status").json()
-    assert status["version"] == "1.0.3"
+    assert status["version"] == "1.0.4"
     assert status["build"]
     app.state.config_store.set_admin_pin("2468")
     event_body = {
@@ -196,6 +198,38 @@ def test_performance_mode_requires_matching_device_and_warning(client, monkeypat
     assert app.state.config_store.ensure().performance_mode == "performance"
 
 
+def test_safe_shutdown_requires_operator_and_schedules_poweroff(client, monkeypatch):
+    test_client, app = client
+    scheduled = []
+    app.state.config_store.set_admin_pin("2468")
+    monkeypatch.setattr(
+        "engine.api.routes.schedule_poweroff", lambda: scheduled.append(True)
+    )
+
+    assert test_client.post("/api/system/shutdown").status_code == 401
+    token = test_client.post("/api/admin/unlock", json={"pin": "2468"}).json()["token"]
+    response = test_client.post(
+        "/api/system/shutdown", headers={"X-Admin-Token": token}
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True, "shutting_down": True}
+    assert scheduled == [True]
+
+
+def test_safe_shutdown_reports_helper_failure(client, monkeypatch):
+    test_client, _app = client
+
+    def fail():
+        raise RuntimeError("systemd refused shutdown")
+
+    monkeypatch.setattr("engine.api.routes.schedule_poweroff", fail)
+    response = test_client.post("/api/system/shutdown")
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == "systemd refused shutdown"
+
+
 def test_phone_studio_pairs_installs_and_archives_template(client, monkeypatch):
     test_client, app = client
     monkeypatch.setattr("engine.api.routes._lan_ip", lambda: "192.168.1.40")
@@ -313,6 +347,96 @@ def test_kiosk_onboarding_connects_wifi_then_saves_r2(client, monkeypatch, tmp_p
     assert (tmp_path / "ssh" / "authorized_keys").read_text() == "ssh-ed25519 AAAATEST operator\n"
     assert app.state.config_store.ensure().r2.bucket == "photo-strips"
     assert test_client.post("/api/admin/unlock", json={"pin": "2468"}).status_code == 200
+
+
+def test_phone_onboarding_pair_is_private_single_use_and_completes(
+    client, monkeypatch, tmp_path
+):
+    test_client, app = client
+    monkeypatch.setattr("engine.provisioning._public_r2_probe", lambda _config: None)
+    monkeypatch.setattr("engine.api.routes.current_ssid", lambda: "Venue")
+    monkeypatch.setattr("engine.api.routes._lan_ip", lambda: "192.168.1.145")
+
+    pairing = test_client.post("/api/onboarding/pair")
+    assert pairing.status_code == 200
+    assert pairing.json()["url"].startswith(
+        "http://192.168.1.145:8080/setup.html#token="
+    )
+    token = pairing.json()["url"].split("#token=", 1)[1]
+    headers = {"X-Setup-Token": token}
+
+    assert test_client.get("/api/setup/status").status_code == 401
+    assert test_client.get(
+        "/api/setup/status", headers={"X-Setup-Token": "wrong"}
+    ).status_code == 401
+    status = test_client.get("/api/setup/status", headers=headers)
+    assert status.status_code == 200
+    assert status.json()["wifi_ssid"] == "Venue"
+
+    completed = test_client.post(
+        "/api/setup/complete",
+        headers=headers,
+        json={
+            "admin_pin": "2468",
+            "ssh_authorized_key": "ssh-ed25519 AAAATEST operator",
+            "r2": {
+                "account_id": "account",
+                "access_key": "access",
+                "secret_key": "secret",
+                "bucket": "photo-strips",
+                "public_base_url": "https://photos.example.com",
+                "jurisdiction": "default",
+            },
+        },
+    )
+    assert completed.status_code == 200
+    assert completed.json()["restarting"] is True
+    assert app.state.onboarding_pairing is None
+    assert (tmp_path / ".provisioned").exists()
+    assert test_client.get("/api/setup/status", headers=headers).status_code == 409
+
+
+def test_phone_onboarding_pair_replaces_revokes_and_expires(client, monkeypatch):
+    test_client, app = client
+    now = {"value": 100.0}
+    monkeypatch.setattr("engine.api.routes.current_ssid", lambda: "Venue")
+    monkeypatch.setattr("engine.api.routes._lan_ip", lambda: "192.168.1.145")
+    monkeypatch.setattr("engine.api.routes.time.monotonic", lambda: now["value"])
+
+    first = test_client.post("/api/onboarding/pair").json()
+    first_token = first["url"].split("#token=", 1)[1]
+    second = test_client.post("/api/onboarding/pair").json()
+    second_token = second["url"].split("#token=", 1)[1]
+    assert first_token != second_token
+    assert test_client.get(
+        "/api/setup/status", headers={"X-Setup-Token": first_token}
+    ).status_code == 401
+    assert test_client.get(
+        "/api/setup/status", headers={"X-Setup-Token": second_token}
+    ).status_code == 200
+
+    assert test_client.delete("/api/onboarding/pair").status_code == 200
+    assert app.state.onboarding_pairing is None
+    assert test_client.get(
+        "/api/setup/status", headers={"X-Setup-Token": second_token}
+    ).status_code == 401
+
+    third = test_client.post("/api/onboarding/pair").json()
+    third_token = third["url"].split("#token=", 1)[1]
+    now["value"] += 901
+    expired = test_client.get(
+        "/api/setup/status", headers={"X-Setup-Token": third_token}
+    )
+    assert expired.status_code == 401
+    assert "expired" in expired.json()["detail"]
+
+
+def test_phone_onboarding_pair_requires_wifi(client, monkeypatch):
+    test_client, _app = client
+    monkeypatch.setattr("engine.api.routes.current_ssid", lambda: None)
+    response = test_client.post("/api/onboarding/pair")
+    assert response.status_code == 400
+    assert "Wi-Fi first" in response.json()["detail"]
 
 
 def test_event_share_builds_archive_and_can_be_disabled(client, monkeypatch):
