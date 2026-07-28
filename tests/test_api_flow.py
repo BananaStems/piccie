@@ -48,7 +48,6 @@ def client(tmp_path, monkeypatch):
     app.state.upload_queue = FakeUploadQueue()
     app.state.finalize_lock = threading.Lock()
     app.state.admin_tokens = set()
-    app.state.onboarding_pairing = None
     app.state.onboarding_lock = threading.Lock()
     app.state.kiosk_watchdog = None
     try:
@@ -144,11 +143,11 @@ def test_preflight_checks_capture_and_guest_delivery(client, monkeypatch):
     assert ready["capture_ready"] is True
     assert ready["r2_reachable"] is True
 
-    app.state.upload_queue.cloud_health = (False, "Worker unavailable")
+    app.state.upload_queue.cloud_health = (False, "R2 unavailable")
     not_ready = test_client.post("/api/admin/preflight").json()
     assert not_ready["ready"] is False
     assert not_ready["capture_ready"] is True
-    assert "Worker unavailable" in not_ready["warnings"][0]
+    assert "R2 unavailable" in not_ready["warnings"][0]
 
     monkeypatch.setattr(
         app.state.camera,
@@ -297,25 +296,15 @@ def test_phone_studio_pairs_installs_and_archives_template(client, monkeypatch):
     ).status_code == 200
 
 
-def test_kiosk_onboarding_connects_wifi_then_saves_r2(client, monkeypatch, tmp_path):
+def test_kiosk_onboarding_requires_imported_r2_then_finishes(client, monkeypatch, tmp_path):
     test_client, app = client
-    monkeypatch.setattr("engine.provisioning._public_r2_probe", lambda _config: None)
+    monkeypatch.setattr("engine.provisioning._r2_probe", lambda _config: None)
     connection = {"ssid": None}
     monkeypatch.setattr("engine.api.routes.current_ssid", lambda: connection["ssid"])
 
     blocked = test_client.post(
         "/api/onboarding/complete",
-        json={
-            "admin_pin": "2468",
-            "r2": {
-                "account_id": "account",
-                "access_key": "access",
-                "secret_key": "secret",
-                "bucket": "photo-strips",
-                "public_base_url": "https://photos.example.com",
-                "jurisdiction": "default",
-            },
-        },
+        json={"admin_pin": "2468"},
     )
     assert blocked.status_code == 400
     assert "Wi-Fi first" in blocked.json()["detail"]
@@ -325,19 +314,28 @@ def test_kiosk_onboarding_connects_wifi_then_saves_r2(client, monkeypatch, tmp_p
         json={"ssid": "Venue", "password": "venue-password", "hidden": False},
     ).status_code == 200
     connection["ssid"] = "Venue"
+    missing_r2 = test_client.post(
+        "/api/onboarding/complete",
+        json={"admin_pin": "2468"},
+    )
+    assert missing_r2.status_code == 400
+    assert "piccie-r2.txt" in missing_r2.json()["detail"]
+
+    (tmp_path / "local.json").write_text(json.dumps({
+        "r2": {
+            "account_id": "account",
+            "access_key": "access",
+            "secret_key": "secret",
+            "bucket": "photo-strips",
+            "jurisdiction": "default",
+        }
+    }))
+    assert test_client.get("/api/status").json()["r2_configured"] is True
     completed = test_client.post(
         "/api/onboarding/complete",
         json={
             "admin_pin": "2468",
             "ssh_authorized_key": "ssh-ed25519 AAAATEST operator",
-            "r2": {
-                "account_id": "account",
-                "access_key": "access",
-                "secret_key": "secret",
-                "bucket": "photo-strips",
-                "public_base_url": "https://photos.example.com",
-                "jurisdiction": "default",
-            },
         },
     )
     assert completed.status_code == 200
@@ -349,125 +347,11 @@ def test_kiosk_onboarding_connects_wifi_then_saves_r2(client, monkeypatch, tmp_p
     assert test_client.post("/api/admin/unlock", json={"pin": "2468"}).status_code == 200
 
 
-def test_phone_onboarding_pair_is_private_single_use_and_completes(
-    client, monkeypatch, tmp_path
-):
-    test_client, app = client
-    monkeypatch.setattr("engine.provisioning._public_r2_probe", lambda _config: None)
-    monkeypatch.setattr("engine.api.routes.current_ssid", lambda: "Venue")
-    monkeypatch.setattr("engine.api.routes._lan_ip", lambda: "192.168.1.145")
-    pairing = test_client.post("/api/onboarding/pair")
-    assert pairing.status_code == 200
-    assert pairing.json()["url"].startswith(
-        "http://192.168.1.145:8080/setup.html#token="
-    )
-    token = pairing.json()["url"].split("#token=", 1)[1]
-    headers = {"X-Setup-Token": token}
-
-    assert test_client.get("/api/setup/status").status_code == 401
-    assert test_client.get(
-        "/api/setup/status", headers={"X-Setup-Token": "wrong"}
-    ).status_code == 401
-    status = test_client.get("/api/setup/status", headers=headers)
-    assert status.status_code == 200
-    assert status.json()["wifi_ssid"] == "Venue"
-    assert "cloudflare_oauth_url" not in status.json()
-
-    completed = test_client.post(
-        "/api/setup/complete",
-        headers=headers,
-        json={
-            "admin_pin": "2468",
-            "ssh_authorized_key": "ssh-ed25519 AAAATEST operator",
-            "r2": {
-                "account_id": "account",
-                "access_key": "access",
-                "secret_key": "secret",
-                "bucket": "photo-strips",
-                "public_base_url": "https://photos.example.com",
-                "jurisdiction": "default",
-            },
-        },
-    )
-    assert completed.status_code == 200
-    assert completed.json()["restarting"] is True
-    assert app.state.onboarding_pairing is None
-    assert (tmp_path / ".provisioned").exists()
-    assert test_client.get("/api/setup/status", headers=headers).status_code == 409
-
-
-def test_phone_onboarding_accepts_worker_credential_without_r2_keys(
-    client, monkeypatch, tmp_path
-):
-    test_client, app = client
-    monkeypatch.setattr("engine.provisioning._public_r2_probe", lambda _config: None)
-    monkeypatch.setattr("engine.api.routes.current_ssid", lambda: "Venue")
-    monkeypatch.setattr("engine.api.routes._lan_ip", lambda: "192.168.1.145")
-
-    pairing = test_client.post("/api/onboarding/pair").json()
-    token = pairing["url"].split("#token=", 1)[1]
-    completed = test_client.post(
-        "/api/setup/complete",
-        headers={"X-Setup-Token": token},
-        json={
-            "admin_pin": "2468",
-            "r2": {
-                "public_base_url": "https://gallery.example",
-                "worker_token": "A" * 43,
-            },
-        },
-    )
-
-    assert completed.status_code == 200
-    r2 = app.state.config_store.ensure().r2
-    assert r2 is not None
-    assert r2.uses_worker_upload
-    assert r2.worker_token == "A" * 43
-    assert r2.account_id == ""
-    assert json.loads((tmp_path / "local.json").read_text())["r2"]["access_key"] == ""
-
-
-def test_phone_onboarding_pair_replaces_revokes_and_expires(client, monkeypatch):
-    test_client, app = client
-    now = {"value": 100.0}
-    monkeypatch.setattr("engine.api.routes.current_ssid", lambda: "Venue")
-    monkeypatch.setattr("engine.api.routes._lan_ip", lambda: "192.168.1.145")
-    monkeypatch.setattr("engine.api.routes.time.monotonic", lambda: now["value"])
-
-    first = test_client.post("/api/onboarding/pair").json()
-    first_token = first["url"].split("#token=", 1)[1]
-    second = test_client.post("/api/onboarding/pair").json()
-    second_token = second["url"].split("#token=", 1)[1]
-    assert first_token != second_token
-    assert test_client.get(
-        "/api/setup/status", headers={"X-Setup-Token": first_token}
-    ).status_code == 401
-    assert test_client.get(
-        "/api/setup/status", headers={"X-Setup-Token": second_token}
-    ).status_code == 200
-
-    assert test_client.delete("/api/onboarding/pair").status_code == 200
-    assert app.state.onboarding_pairing is None
-    assert test_client.get(
-        "/api/setup/status", headers={"X-Setup-Token": second_token}
-    ).status_code == 401
-
-    third = test_client.post("/api/onboarding/pair").json()
-    third_token = third["url"].split("#token=", 1)[1]
-    now["value"] += 901
-    expired = test_client.get(
-        "/api/setup/status", headers={"X-Setup-Token": third_token}
-    )
-    assert expired.status_code == 401
-    assert "expired" in expired.json()["detail"]
-
-
-def test_phone_onboarding_pair_requires_wifi(client, monkeypatch):
+def test_removed_phone_setup_endpoints_are_not_exposed(client):
     test_client, _app = client
-    monkeypatch.setattr("engine.api.routes.current_ssid", lambda: None)
-    response = test_client.post("/api/onboarding/pair")
-    assert response.status_code == 400
-    assert "Wi-Fi first" in response.json()["detail"]
+    assert test_client.post("/api/onboarding/pair").status_code == 404
+    assert test_client.get("/api/setup/status").status_code == 404
+    assert test_client.post("/api/setup/complete", json={}).status_code == 404
 
 
 def test_event_share_builds_archive_and_can_be_disabled(client, monkeypatch):
@@ -480,7 +364,6 @@ def test_event_share_builds_archive_and_can_be_disabled(client, monkeypatch):
             "access_key": "key",
             "secret_key": "secret",
             "bucket": "photos",
-            "public_base_url": "https://gallery.example",
         }
     }))
     event = app.state.storage.create_event("Wedding", "2026-08-01", "classic")

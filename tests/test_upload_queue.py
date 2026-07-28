@@ -21,7 +21,6 @@ def test_delete_requested_during_upload_wins(tmp_path, monkeypatch):
                     "access_key": "key",
                     "secret_key": "secret",
                     "bucket": "photos",
-                    "public_base_url": "https://photos.example.com",
                 }
             }
         )
@@ -53,7 +52,6 @@ def test_delete_requested_during_upload_wins(tmp_path, monkeypatch):
             ok, targets = storage.clear_event_photos(event.id)
             assert ok and targets == [
                 target,
-                f"event-share:{event.id}:{share_token}",
                 f"event-content:{event.id}",
             ]
             return "https://photos.example.com/s/token", share_token
@@ -72,10 +70,7 @@ def test_delete_requested_during_upload_wins(tmp_path, monkeypatch):
     )
 
     assert uploader.deleted == [target]
-    assert storage.pending_r2_deletions() == [
-        f"event-share:{event.id}:{uploader.tokens[0]}",
-        f"event-content:{event.id}",
-    ]
+    assert storage.pending_r2_deletions() == [f"event-content:{event.id}"]
     assert storage.get_session(session.id) is None
 
 
@@ -89,7 +84,6 @@ def test_retry_reuses_share_token_persisted_before_upload(tmp_path, monkeypatch)
                     "access_key": "key",
                     "secret_key": "secret",
                     "bucket": "photos",
-                    "public_base_url": "https://photos.example.com",
                 }
             }
         )
@@ -205,12 +199,11 @@ def test_cloud_health_fails_closed_then_recovers(tmp_path, monkeypatch):
                     "access_key": "key",
                     "secret_key": "secret",
                     "bucket": "photos",
-                    "public_base_url": "https://photos.example.com",
                 }
             }
         )
     )
-    monkeypatch.setattr("engine.provisioning._public_r2_probe", lambda _config: None)
+    monkeypatch.setattr("engine.provisioning._r2_probe", lambda _config: None)
 
     assert upload_queue.check_cloud_health() == (True, None)
     assert upload_queue.cloud_health == (True, None)

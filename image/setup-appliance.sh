@@ -36,6 +36,13 @@ visudo -cf /etc/sudoers.d/piccie-shutdown >/dev/null
 install -m 644 "${INSTALL_DIR}/image/piccie-bootdiag.service" /etc/systemd/system/
 install -m 755 "${INSTALL_DIR}/image/bootdiag.sh" /usr/local/bin/piccie-bootdiag
 
+# The FAT boot partition is visible on macOS, Windows and Linux immediately
+# after flashing. Keep an existing operator-edited file; otherwise install the
+# documented R2 template that Piccie imports on first boot.
+if [[ -d /boot/firmware && ! -e /boot/firmware/piccie-r2.txt ]]; then
+  install -m 644 "${INSTALL_DIR}/image/files/piccie-r2.txt" /boot/firmware/piccie-r2.txt
+fi
+
 # Watertight (read-only root + writable /data) units + scripts.
 install -m 755 "${INSTALL_DIR}/image/piccie-grow-data.sh" /usr/local/sbin/piccie-grow-data
 install -m 755 "${INSTALL_DIR}/image/piccie-firstboot-datapart.sh" /usr/local/bin/piccie-firstboot-datapart

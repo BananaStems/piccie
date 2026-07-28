@@ -23,7 +23,6 @@ def test_r2_from_local_file(store):
                     "access_key": "key",
                     "secret_key": "secret",
                     "bucket": "bucket",
-                    "public_base_url": "https://cdn.example.com",
                 },
             }
         )
@@ -33,19 +32,14 @@ def test_r2_from_local_file(store):
     assert r2.bucket == "bucket"
 
 
-def test_worker_upload_config_does_not_require_r2_api_keys(store):
+def test_incomplete_r2_config_is_rejected(store):
     config_store, config_file = store
     config_file.write_text(
         json.dumps(
             {
-                "r2": {
-                    "public_base_url": "https://gallery.example",
-                    "worker_token": "worker-secret",
-                },
+                "r2": {},
             }
         )
     )
     r2 = config_store.r2_from_local()
-    assert r2 is not None
-    assert r2.uses_worker_upload
-    assert r2.account_id == ""
+    assert r2 is None

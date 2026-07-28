@@ -27,11 +27,11 @@ def test_status_limits_fail_closed() -> None:
     else:
         raise AssertionError("backlog limit should fail the soak test")
 
-    cloud_down = {**healthy, "r2_reachable": False, "r2_last_error": "Worker down"}
+    cloud_down = {**healthy, "r2_reachable": False, "r2_last_error": "R2 down"}
     try:
         check_status(cloud_down, min_disk_free_mb=500, max_upload_backlog=10)
     except RuntimeError as exc:
-        assert "Worker down" in str(exc)
+        assert "R2 down" in str(exc)
     else:
         raise AssertionError("cloud failure should fail the soak test")
 

@@ -66,8 +66,8 @@ class UploadQueue:
             self._cloud_error = error
 
     def check_cloud_health(self) -> tuple[bool, str | None]:
-        """Exercise the same private-strip/Worker route guests use."""
-        from engine.provisioning import _public_r2_probe
+        """Exercise the same R2 upload and public download route guests use."""
+        from engine.provisioning import _r2_probe
 
         with self._probe_lock:
             config = self.config_store.load()
@@ -76,7 +76,7 @@ class UploadQueue:
                 self._set_cloud_health(False, error)
                 return False, error
             try:
-                _public_r2_probe(config.r2)
+                _r2_probe(config.r2)
             except Exception as exc:  # noqa: BLE001 - surfaced as a readiness diagnostic
                 error = str(exc) or type(exc).__name__
                 self._set_cloud_health(False, error)
@@ -176,7 +176,7 @@ class UploadQueue:
     def _rescan_loop(self) -> None:
         """Re-enqueue pending/failed sessions periodically. Without this a WiFi
         outage during a party permanently strands every session it touched until
-        a power cycle (the worker only ran resume_pending once at boot)."""
+        a power cycle (the upload thread only ran resume_pending once at boot)."""
         while not self._stop_event.wait(RESCAN_INTERVAL_SECONDS):
             try:
                 self.resume_pending()
@@ -193,9 +193,7 @@ class UploadQueue:
             config.r2.access_key,
             config.r2.secret_key,
             config.r2.bucket,
-            config.r2.public_base_url,
             config.r2.jurisdiction,
-            config.r2.worker_token,
         )
         if self._uploader is None or self._uploader_key != key:
             self._uploader = R2Uploader(config.r2)
@@ -291,9 +289,8 @@ class UploadQueue:
         meta = self.storage.get_session_meta(session) if session else {}
         share_token = meta.get("share_token")
         if session and not share_token:
-            # Persist the token before the first network side effect. A crash after
-            # the Worker share record is written then retries the same URL instead
-            # of leaking an unreachable share record.
+            # Persist the token before the first network side effect so retries
+            # keep stable session metadata across a power loss.
             share_token = R2Uploader.new_session_share_token(event.id, job.session_id)
             meta = self.storage.merge_session_meta(
                 session,

@@ -21,6 +21,10 @@ Environment=PICCIE_FAST_RESIZE=1
 Environment=PICCIE_DISK_LOW_MB=500
 Environment=PICCIE_ONBOARDING=1
 Environment=PICCIE_ONBOARDING_DATA_DIR=/data
+# Import the optional boot-partition R2 file as root before the unprivileged
+# engine reads /data/local.json. The importer refuses degraded/tmpfs /data,
+# validates every field, writes atomically, and removes the readable FAT copy.
+ExecStartPre=+/opt/piccie/venv/bin/python -m engine.r2_boot_config
 # /data is the writable partition; the engine (User=pi) must own it to write
 # config.json + the SQLite DB. The first-boot chown can race the mount, so assert
 # it here as root before every start. '+' runs privileged despite User=pi.

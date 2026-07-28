@@ -201,7 +201,8 @@ if [[ -n "${IMG_PATH}" && -f "${IMG_PATH}" ]]; then
   echo "Flash this file to your SD card:"
   echo "  ${IMG_PATH}"
   echo ""
-  echo "First boot connects Wi-Fi, then shows a one-time QR for phone setup."
+  echo "Before first boot, edit piccie-r2.txt on the microSD boot partition."
+  echo "First boot imports R2 settings, connects Wi-Fi, and sets the operator PIN."
 else
   echo "Build finished; check ${PI_GEN_DIR}/deploy/ for output images."
 fi

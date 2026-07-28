@@ -28,13 +28,7 @@ class R2Config:
     access_key: str = ""
     secret_key: str = ""
     bucket: str = ""
-    public_base_url: str = ""
     jurisdiction: str = "default"
-    worker_token: str = ""
-
-    @property
-    def uses_worker_upload(self) -> bool:
-        return bool(self.worker_token)
 
 
 @dataclass
@@ -55,7 +49,7 @@ class AppConfig:
 class ConfigStore:
     """Persist non-secret booth state.
 
-    R2 credentials live only in the root-readable local configuration file. The
+    R2 credentials live only in the mode-0600 local configuration file. The
     previous second, device-derived encrypted copy in config.json did not add a
     security boundary: the key and ciphertext were on the same device.
     """
@@ -167,19 +161,18 @@ class ConfigStore:
         r2_raw = local.get("r2")
         if not r2_raw:
             return None
-        if not r2_raw.get("public_base_url"):
-            return None
-        direct_required = ("account_id", "access_key", "secret_key", "bucket")
-        if not r2_raw.get("worker_token") and not all(
-            r2_raw.get(key) for key in direct_required
-        ):
+        required = (
+            "account_id",
+            "access_key",
+            "secret_key",
+            "bucket",
+        )
+        if not all(r2_raw.get(key) for key in required):
             return None
         return R2Config(
-            account_id=r2_raw.get("account_id", ""),
-            access_key=r2_raw.get("access_key", ""),
-            secret_key=r2_raw.get("secret_key", ""),
-            bucket=r2_raw.get("bucket", ""),
-            public_base_url=r2_raw["public_base_url"],
+            account_id=r2_raw["account_id"],
+            access_key=r2_raw["access_key"],
+            secret_key=r2_raw["secret_key"],
+            bucket=r2_raw["bucket"],
             jurisdiction=r2_raw.get("jurisdiction", "default"),
-            worker_token=r2_raw.get("worker_token", ""),
         )

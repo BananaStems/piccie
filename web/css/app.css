@@ -1051,40 +1051,29 @@ input[type="date"]::-webkit-calendar-picker-indicator {
   font-size: var(--font-md);
 }
 
-.onboarding-pairing {
-  min-height: 100%;
-  display: grid;
-  grid-template-columns: 190px minmax(0, 1fr);
-  align-items: center;
-  gap: var(--space-5);
+.onboarding-storage-ready {
+  cursor: default;
 }
 
-.onboarding-pair-qr {
-  width: 190px;
-  height: 190px;
-  padding: var(--space-2);
-  border-radius: var(--radius-sm);
-  background: #fff;
-}
-
-.onboarding-pair-copy {
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-}
-
-.onboarding-pair-copy p,
-.onboarding-pair-copy span {
-  margin: 0;
+.onboarding-storage-missing {
+  max-width: 620px;
   color: var(--muted);
   font-size: var(--font-sm);
+  line-height: 1.5;
 }
 
-.onboarding-pair-copy code {
-  overflow-wrap: anywhere;
+.onboarding-storage-missing p {
+  margin: 0 0 var(--space-2);
+}
+
+.onboarding-storage-missing ol {
+  margin: 0 0 var(--space-3);
+  padding-left: var(--space-5);
+}
+
+.onboarding-storage-missing code {
   color: var(--text);
-  font-size: var(--font-xs);
+  font-weight: 700;
 }
 
 .text-button {

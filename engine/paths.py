@@ -29,9 +29,9 @@ def r2_event_archive_key(event_id: str) -> str:
     return f"{r2_event_prefix(event_id)}download-all.zip"
 
 
-def r2_share_key(event_id: str, token: str) -> str:
+def r2_event_gallery_key(event_id: str, token: str) -> str:
     digest = hashlib.sha256(token.encode("utf-8")).hexdigest()
-    return f"{r2_event_prefix(event_id)}shares/{digest}.json"
+    return f"{r2_event_prefix(event_id)}shares/{digest}.html"
 
 
 def r2_session_target(event_id: str, session_id: str) -> str:

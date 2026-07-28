@@ -10,6 +10,7 @@ async function importBrowserModule(relativePath) {
 
 const cornerTap = await importBrowserModule("../js/corner-tap.js");
 const osk = await importBrowserModule("../js/osk.js");
+const onboardingSource = await readFile(new URL("../js/screens/onboarding.js", import.meta.url), "utf8");
 
 test("five-tap party exit never deactivates without operator unlock", async () => {
   const actions = [];
@@ -51,4 +52,10 @@ test("Wi-Fi keyboard fields snap to the visible bottom edge", () => {
   assert.equal(osk.scrollBlockForInput(wifiInput), "end");
   assert.equal(osk.scrollBlockForInput(wifiNameInput), "center");
   assert.equal(osk.scrollBlockForInput(regularInput), "center");
+});
+
+test("first-boot setup uses the SD-card R2 file and has no phone pairing flow", () => {
+  assert.match(onboardingSource, /piccie-r2\.txt/);
+  assert.match(onboardingSource, /r2_configured/);
+  assert.doesNotMatch(onboardingSource, /pairOnboarding|onboarding-pair-qr|Continue on your phone/);
 });

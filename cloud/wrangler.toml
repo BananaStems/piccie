@@ -1,8 +1,0 @@
-name = "piccie-gallery"
-main = "src/worker.js"
-compatibility_date = "2026-07-19"
-workers_dev = true
-
-[[r2_buckets]]
-binding = "PHOTOS"
-bucket_name = "photobooth"

@@ -1,9 +1,11 @@
-import json
-import urllib.parse
 from unittest.mock import MagicMock
 
 from engine.config import R2Config
-from engine.paths import r2_event_archive_key, r2_event_strip_key, r2_share_key
+from engine.paths import (
+    r2_event_archive_key,
+    r2_event_gallery_key,
+    r2_event_strip_key,
+)
 from engine.r2 import R2Uploader
 
 
@@ -21,60 +23,136 @@ class Response:
         return self.body
 
 
-def test_eu_jurisdiction_uses_eu_endpoint():
-    config = R2Config(
-        "acct", "key", "secret", "photos", "https://cdn.example.com", jurisdiction="eu"
+def uploader_with_mock_client():
+    uploader = R2Uploader(
+        R2Config("acct", "key", "secret", "photos")
     )
-    uploader = R2Uploader(config)
+    uploader.client = MagicMock()
+    uploader.client.generate_presigned_url.side_effect = (
+        lambda _operation, Params, ExpiresIn: (
+            f"https://signed.example/{Params['Key']}?expires={ExpiresIn}"
+        )
+    )
+    return uploader
+
+
+def test_eu_jurisdiction_uses_eu_endpoint():
+    uploader = R2Uploader(
+        R2Config(
+            "acct",
+            "key",
+            "secret",
+            "photos",
+            jurisdiction="eu",
+        )
+    )
     assert uploader.client.meta.endpoint_url == "https://acct.eu.r2.cloudflarestorage.com"
 
 
-def test_upload_session_is_private_and_returns_worker_link(tmp_path):
-    config = R2Config("acct", "key", "secret", "photos", "https://gallery.example")
-    uploader = R2Uploader(config)
-    uploader.client = MagicMock()
+def test_upload_session_returns_signed_private_object_url(tmp_path):
+    uploader = uploader_with_mock_client()
     event = "11111111-1111-4111-8111-111111111111"
     session = "22222222-2222-4222-8222-222222222222"
     token = f"{event}.{session}.secret"
+    (tmp_path / "strip.jpg").write_bytes(b"jpeg")
 
     url, returned_token = uploader.upload_session(
         tmp_path, event, session, "Sarah & James", "2026-06-14", share_token=token
     )
 
-    assert url == f"https://gallery.example/s/{token}"
+    strip_key = r2_event_strip_key(event, session)
+    assert url == f"https://signed.example/{strip_key}?expires=604800"
     assert returned_token == token
-    upload = uploader.client.upload_file.call_args
-    assert upload.args[2] == r2_event_strip_key(event, session)
+    assert uploader.client.upload_file.call_args.args[2] == strip_key
     keys = {call.kwargs["Key"] for call in uploader.client.put_object.call_args_list}
-    assert r2_share_key(event, token) in keys
-    assert f"events/{event}/manifest.json" in keys
+    assert keys == {f"events/{event}/manifest.json"}
 
 
-def test_publish_event_replaces_old_share_after_new_one_exists(tmp_path):
-    config = R2Config("acct", "key", "secret", "photos", "https://gallery.example")
-    uploader = R2Uploader(config)
-    uploader.client = MagicMock()
+def test_publish_event_uploads_static_gallery_then_revokes_old_link(tmp_path):
+    uploader = uploader_with_mock_client()
     event = "11111111-1111-4111-8111-111111111111"
+    session = "22222222-2222-4222-8222-222222222222"
     archive = tmp_path / "download-all.zip"
     archive.write_bytes(b"zip")
     previous = f"{event}.old"
+    uploader.client.list_objects_v2.return_value = {
+        "Contents": [{"Key": r2_event_strip_key(event, session)}],
+        "IsTruncated": False,
+    }
 
-    url, token = uploader.publish_event(event, "Wedding", "2026-06-14", archive, previous)
+    url, token = uploader.publish_event(
+        event, "Sarah & James", "2026-06-14", archive, previous
+    )
 
-    assert url == f"https://gallery.example/g/{token}"
+    gallery_key = r2_event_gallery_key(event, token)
+    assert url == f"https://signed.example/{gallery_key}?expires=604800"
     assert token.startswith(f"{event}.")
-    upload = uploader.client.upload_file.call_args
-    assert upload.args[2] == r2_event_archive_key(event)
-    put_keys = [call.kwargs["Key"] for call in uploader.client.put_object.call_args_list]
-    delete_key = uploader.client.delete_object.call_args.kwargs["Key"]
-    assert r2_share_key(event, token) in put_keys
-    assert delete_key == r2_share_key(event, previous)
+    assert uploader.client.upload_file.call_args.args[2] == r2_event_archive_key(event)
+    gallery_upload = [
+        call for call in uploader.client.put_object.call_args_list
+        if call.kwargs["Key"] == gallery_key
+    ][0]
+    gallery = gallery_upload.kwargs["Body"].decode()
+    assert "Sarah &amp; James" in gallery
+    assert (
+        f"https://signed.example/{r2_event_strip_key(event, session)}?expires=604800"
+        in gallery
+    )
+    assert gallery_upload.kwargs["ContentType"] == "text/html; charset=utf-8"
+    uploader.client.delete_object.assert_called_once_with(
+        Bucket="photos",
+        Key=r2_event_gallery_key(event, previous),
+    )
+
+
+def test_gallery_html_escapes_event_text_and_does_not_embed_credentials():
+    uploader = uploader_with_mock_client()
+    uploader.client.list_objects_v2.return_value = {"Contents": []}
+
+    page = uploader._gallery_html(
+        "11111111-1111-4111-8111-111111111111",
+        '<script>alert("x")</script>',
+        "2026-06-14",
+    ).decode()
+
+    assert "<script>" not in page
+    assert "&lt;script&gt;" in page
+    assert "SECRET_ACCESS_KEY" not in page
+    assert "access_key" not in page
+
+
+def test_gallery_html_lists_every_paginated_strip():
+    uploader = uploader_with_mock_client()
+    event = "11111111-1111-4111-8111-111111111111"
+    first = r2_event_strip_key(
+        event, "22222222-2222-4222-8222-222222222222"
+    )
+    second = r2_event_strip_key(
+        event, "33333333-3333-4333-8333-333333333333"
+    )
+    uploader.client.list_objects_v2.side_effect = [
+        {
+            "Contents": [{"Key": first}],
+            "IsTruncated": True,
+            "NextContinuationToken": "next-page",
+        },
+        {
+            "Contents": [{"Key": second}],
+            "IsTruncated": False,
+        },
+    ]
+
+    page = uploader._gallery_html(event, "Wedding", "2026-06-14").decode()
+
+    assert first in page
+    assert second in page
+    assert uploader.client.list_objects_v2.call_args_list[1].kwargs[
+        "ContinuationToken"
+    ] == "next-page"
 
 
 def test_delete_event_target_removes_every_object_under_prefix():
-    config = R2Config("acct", "key", "secret", "photos", "https://gallery.example")
-    uploader = R2Uploader(config)
-    uploader.client = MagicMock()
+    uploader = uploader_with_mock_client()
     event = "11111111-1111-4111-8111-111111111111"
     uploader.client.list_objects_v2.return_value = {
         "Contents": [{"Key": f"events/{event}/manifest.json"}],
@@ -90,39 +168,35 @@ def test_delete_event_target_removes_every_object_under_prefix():
     assert deleted == [{"Key": f"events/{event}/manifest.json"}]
 
 
-def test_delete_share_target_removes_exact_hashed_record():
-    config = R2Config("acct", "key", "secret", "photos", "https://gallery.example")
-    uploader = R2Uploader(config)
-    uploader.client = MagicMock()
+def test_disable_event_share_removes_exact_static_page():
+    uploader = uploader_with_mock_client()
     event = "11111111-1111-4111-8111-111111111111"
-    token = f"{event}.session.secret"
+    token = f"{event}.secret"
 
-    uploader.delete_target(f"event-share:{event}:{token}")
+    uploader.disable_share(event, token)
 
     uploader.client.delete_object.assert_called_once_with(
         Bucket="photos",
-        Key=r2_share_key(event, token),
+        Key=r2_event_gallery_key(event, token),
     )
 
 
 def test_guest_download_must_match_uploaded_strip(tmp_path, monkeypatch):
     strip = tmp_path / "strip.jpg"
     strip.write_bytes(b"jpeg bytes")
-    config = R2Config("acct", "key", "secret", "photos", "https://gallery.example")
-    uploader = R2Uploader(config)
+    uploader = uploader_with_mock_client()
     monkeypatch.setattr(
         "engine.r2.urllib.request.urlopen",
         lambda _request, timeout: Response(b"jpeg bytes"),
     )
 
-    uploader.verify_guest_download("https://gallery.example/s/token", strip)
+    uploader.verify_guest_download("https://signed.example/object.jpg", strip)
 
 
 def test_guest_download_mismatch_fails_closed(tmp_path, monkeypatch):
     strip = tmp_path / "strip.jpg"
     strip.write_bytes(b"expected")
-    config = R2Config("acct", "key", "secret", "photos", "https://gallery.example")
-    uploader = R2Uploader(config)
+    uploader = uploader_with_mock_client()
     monkeypatch.setattr(
         "engine.r2.urllib.request.urlopen",
         lambda _request, timeout: Response(b"wrong"),
@@ -131,114 +205,11 @@ def test_guest_download_mismatch_fails_closed(tmp_path, monkeypatch):
 
     try:
         uploader.verify_guest_download(
-            "https://gallery.example/s/token",
+            "https://signed.example/object.jpg",
             strip,
             attempts=2,
         )
     except RuntimeError as exc:
-        assert "guest link" in str(exc)
+        assert "signed download URL" in str(exc)
     else:
         raise AssertionError("mismatched guest bytes should fail the upload")
-
-
-def test_worker_upload_uses_bearer_credential_and_expected_keys(tmp_path, monkeypatch):
-    strip = tmp_path / "strip.jpg"
-    strip.write_bytes(b"jpeg")
-    config = R2Config(
-        public_base_url="https://gallery.example",
-        worker_token="booth-token",
-    )
-    uploader = R2Uploader(config)
-    requests = []
-
-    def urlopen(request, timeout):
-        requests.append(request)
-        return Response(b'{"ok":true}')
-
-    monkeypatch.setattr("engine.r2.urllib.request.urlopen", urlopen)
-    event = "11111111-1111-4111-8111-111111111111"
-    session = "22222222-2222-4222-8222-222222222222"
-    token = f"{event}.{session}.secret"
-    uploader.upload_session(
-        tmp_path,
-        event,
-        session,
-        "Wedding",
-        "2026-06-14",
-        share_token=token,
-    )
-
-    assert uploader.client is None
-    assert len(requests) == 3
-    assert all(request.get_header("Authorization") == "Bearer booth-token" for request in requests)
-    keys = {
-        urllib.parse.parse_qs(urllib.parse.urlsplit(request.full_url).query)["key"][0]
-        for request in requests
-    }
-    assert keys == {
-        r2_event_strip_key(event, session),
-        r2_share_key(event, token),
-        f"events/{event}/manifest.json",
-    }
-
-
-def test_worker_large_upload_uses_multipart_and_completes(tmp_path, monkeypatch):
-    archive = tmp_path / "download-all.zip"
-    archive.write_bytes(b"abcdefghij")
-    uploader = R2Uploader(
-        R2Config(
-            public_base_url="https://gallery.example",
-            worker_token="booth-token",
-        )
-    )
-    monkeypatch.setattr("engine.r2.MULTIPART_THRESHOLD", 4)
-    monkeypatch.setattr("engine.r2.MULTIPART_PART_SIZE", 4)
-    calls = []
-
-    def urlopen(request, timeout):
-        calls.append(request)
-        path = urllib.parse.urlsplit(request.full_url).path
-        if path.endswith("/start"):
-            return Response(b'{"upload_id":"upload-1"}')
-        if path.endswith("/part"):
-            part = urllib.parse.parse_qs(
-                urllib.parse.urlsplit(request.full_url).query
-            )["part"][0]
-            return Response(json.dumps({"etag": f"etag-{part}"}).encode())
-        return Response(b'{"ok":true}')
-
-    monkeypatch.setattr("engine.r2.urllib.request.urlopen", urlopen)
-    uploader._upload_file(
-        archive,
-        "events/11111111-1111-4111-8111-111111111111/download-all.zip",
-        "application/zip",
-    )
-
-    paths = [urllib.parse.urlsplit(request.full_url).path for request in calls]
-    assert paths.count("/booth/multipart/part") == 3
-    assert paths[-1] == "/booth/multipart/complete"
-    completion = json.loads(calls[-1].data)
-    assert completion["parts"] == [
-        {"partNumber": 1, "etag": "etag-1"},
-        {"partNumber": 2, "etag": "etag-2"},
-        {"partNumber": 3, "etag": "etag-3"},
-    ]
-
-
-def test_worker_deletion_sends_only_validated_target_to_worker(monkeypatch):
-    uploader = R2Uploader(
-        R2Config(
-            public_base_url="https://gallery.example",
-            worker_token="booth-token",
-        )
-    )
-    requests = []
-    monkeypatch.setattr(
-        "engine.r2.urllib.request.urlopen",
-        lambda request, timeout: requests.append(request) or Response(b'{"ok":true}'),
-    )
-    event = "11111111-1111-4111-8111-111111111111"
-    uploader.delete_target(f"event:{event}")
-    parsed = urllib.parse.urlsplit(requests[0].full_url)
-    assert parsed.path == "/booth/prefix"
-    assert urllib.parse.parse_qs(parsed.query)["prefix"] == [f"events/{event}/"]

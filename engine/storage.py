@@ -444,9 +444,6 @@ class Storage:
                 target = None
             if target:
                 targets.append(target)
-            token = meta.get("share_token") if isinstance(meta, dict) else None
-            if token:
-                targets.append(f"event-share:{session_row['event_id']}:{token}")
         return list(dict.fromkeys(targets))
 
     @staticmethod

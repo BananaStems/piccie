@@ -1,0 +1,25 @@
+# PICCIE CLOUDFLARE R2 SETUP
+#
+# Edit this file after flashing the Piccie image and before putting the microSD
+# card into the Raspberry Pi. Do not change the names to the left of "=".
+#
+# 1. Sign in to https://dash.cloudflare.com/
+# 2. Open Storage & databases > R2 and create a bucket named "piccie-photos".
+# 3. Return to R2 Overview. Beside Account Details > API Tokens, select Manage.
+# 4. Create an Account API token with "Object Read & Write" permission and
+#    restrict it to only the "piccie-photos" bucket.
+# 5. Copy the Account ID, Access Key ID and Secret Access Key below. Cloudflare
+#    shows the secret only once.
+# 6. Save this file, safely eject the microSD card, insert it into Piccie and
+#    power on. Piccie imports the credentials and removes this readable copy.
+#    If Piccie cannot import it, shut down and read piccie-r2-status.txt on this
+#    same drive for the exact field to correct.
+#
+# Keep these credentials private. Anyone with them can access this R2 bucket.
+# The bucket stays private. Piccie creates time-limited guest download links.
+
+ACCOUNT_ID=
+ACCESS_KEY_ID=
+SECRET_ACCESS_KEY=
+BUCKET_NAME=piccie-photos
+JURISDICTION=default

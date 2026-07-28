@@ -78,14 +78,6 @@ export const api = {
       body: JSON.stringify(data),
       timeoutMs: 420000,
     }),
-  pairOnboarding: () =>
-    request("/onboarding/pair", {
-      method: "POST",
-    }),
-  revokeOnboardingPairing: () =>
-    request("/onboarding/pair", {
-      method: "DELETE",
-    }),
   preflight: () => request("/admin/preflight", { method: "POST", timeoutMs: 420000 }),
   getCameraSettings: () => request("/settings/camera"),
   updateCameraSettings: (patch) =>

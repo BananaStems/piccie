@@ -1,11 +1,11 @@
 from __future__ import annotations
 
+import html
 import json
 import logging
 import secrets
 import time
 import urllib.error
-import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -15,32 +15,29 @@ from botocore.config import Config
 from engine.config import R2Config
 from engine.paths import (
     r2_event_archive_key,
+    r2_event_gallery_key,
     r2_event_manifest_key,
     r2_event_prefix,
     r2_event_strip_key,
-    r2_share_key,
 )
 
 logger = logging.getLogger(__name__)
-MULTIPART_THRESHOLD = 8 * 1024 * 1024
-MULTIPART_PART_SIZE = 8 * 1024 * 1024
+GUEST_LINK_EXPIRY_SECONDS = 7 * 24 * 60 * 60
 
 
 class R2Uploader:
     def __init__(self, config: R2Config) -> None:
         self.config = config
-        self.client = None
-        if config.uses_worker_upload:
-            return
         jurisdiction = "" if config.jurisdiction == "default" else f".{config.jurisdiction}"
         endpoint = f"https://{config.account_id}{jurisdiction}.r2.cloudflarestorage.com"
         # Bounded timeouts + retry cap: venue WiFi drops mid-party must not wedge
-        # the single upload worker for minutes. 5s connect / 30s read, 2 attempts.
+        # the single upload thread for minutes. 5s connect / 30s read, 2 attempts.
         self.client = boto3.client(
             "s3",
             endpoint_url=endpoint,
             aws_access_key_id=config.access_key,
             aws_secret_access_key=config.secret_key,
+            region_name="auto",
             config=Config(
                 signature_version="s3v4",
                 connect_timeout=5,
@@ -58,22 +55,14 @@ class R2Uploader:
         event_date: str,
         share_token: str | None = None,
     ) -> tuple[str, str]:
-        """Upload a private strip and return its Worker URL and share token."""
+        """Upload a private strip and return a time-limited R2 download URL."""
         strip_local = session_dir / "strip.jpg"
         strip_key = r2_event_strip_key(event_id, session_id)
         self._upload_file(strip_local, strip_key, content_type="image/jpeg")
 
         token = share_token or self.new_session_share_token(event_id, session_id)
-        self._upload_json(
-            {
-                "kind": "strip",
-                "event_id": event_id,
-                "session_id": session_id,
-            },
-            r2_share_key(event_id, token),
-        )
         self._upload_manifest(event_id, event_name, event_date)
-        url = self.public_url(f"s/{token}")
+        url = self.download_url(strip_key)
         return url, token
 
     @staticmethod
@@ -95,21 +84,20 @@ class R2Uploader:
             r2_event_archive_key(event_id),
             content_type="application/zip",
         )
-        self._upload_json(
-            {"kind": "event", "event_id": event_id},
-            r2_share_key(event_id, token),
+        gallery_key = r2_event_gallery_key(event_id, token)
+        self._upload_bytes(
+            self._gallery_html(event_id, event_name, event_date),
+            gallery_key,
+            content_type="text/html; charset=utf-8",
         )
         if previous_token:
             self.disable_share(event_id, previous_token)
-        return self.public_url(f"g/{token}"), token
+        return self.download_url(gallery_key), token
 
     def disable_share(self, event_id: str, token: str) -> None:
-        if self.config.uses_worker_upload:
-            self._worker_delete_key(r2_share_key(event_id, token))
-            return
         self.client.delete_object(
             Bucket=self.config.bucket,
-            Key=r2_share_key(event_id, token),
+            Key=r2_event_gallery_key(event_id, token),
         )
 
     def delete_target(self, target: str) -> None:
@@ -119,13 +107,10 @@ class R2Uploader:
         if target.startswith("event-content:"):
             event_id = target.split(":", 1)[1]
             self._delete_prefix(f"{r2_event_prefix(event_id)}sessions/")
-            if self.config.uses_worker_upload:
-                self._worker_delete_key(r2_event_archive_key(event_id))
-            else:
-                self.client.delete_object(
-                    Bucket=self.config.bucket,
-                    Key=r2_event_archive_key(event_id),
-                )
+            self.client.delete_object(
+                Bucket=self.config.bucket,
+                Key=r2_event_archive_key(event_id),
+            )
             return
         if target.startswith("event-session:"):
             _, event_id, session_id = target.split(":", 2)
@@ -138,14 +123,6 @@ class R2Uploader:
         raise ValueError(f"Unknown R2 deletion target: {target}")
 
     def _delete_prefix(self, prefix: str) -> None:
-        if self.config.uses_worker_upload:
-            self._worker_request(
-                "DELETE",
-                "/booth/prefix",
-                query={"prefix": prefix},
-            )
-            logger.info("Deleted Worker R2 prefix %s", prefix)
-            return
         continuation: str | None = None
         while True:
             args = {"Bucket": self.config.bucket, "Prefix": prefix}
@@ -169,10 +146,6 @@ class R2Uploader:
         key: str,
         content_type: str = "image/jpeg",
     ) -> None:
-        if self.config.uses_worker_upload:
-            self._worker_upload_file(path, key, content_type)
-            logger.info("Uploaded %s through gallery Worker as %s", path.name, key)
-            return
         self.client.upload_file(
             str(path),
             self.config.bucket,
@@ -183,21 +156,14 @@ class R2Uploader:
 
     def _upload_json(self, payload: dict, key: str) -> None:
         encoded = json.dumps(payload, separators=(",", ":")).encode("utf-8")
-        if self.config.uses_worker_upload:
-            self._worker_request(
-                "PUT",
-                "/booth/object",
-                query={"key": key},
-                data=encoded,
-                headers={"Content-Type": "application/json"},
-            )
-            logger.info("Uploaded %s through gallery Worker", key.split("/")[-1])
-            return
+        self._upload_bytes(encoded, key, content_type="application/json")
+
+    def _upload_bytes(self, data: bytes, key: str, *, content_type: str) -> None:
         self.client.put_object(
             Bucket=self.config.bucket,
             Key=key,
-            Body=encoded,
-            ContentType="application/json",
+            Body=data,
+            ContentType=content_type,
         )
         logger.info("Uploaded %s to s3://%s/%s", key.split("/")[-1], self.config.bucket, key)
 
@@ -207,118 +173,71 @@ class R2Uploader:
             r2_event_manifest_key(event_id),
         )
 
-    def public_url(self, key: str) -> str:
-        base = self.config.public_base_url.rstrip("/")
-        return f"{base}/{key}"
-
-    def _worker_upload_file(self, path: Path, key: str, content_type: str) -> None:
-        if path.stat().st_size < MULTIPART_THRESHOLD:
-            self._worker_request(
-                "PUT",
-                "/booth/object",
-                query={"key": key},
-                data=path.read_bytes(),
-                headers={"Content-Type": content_type},
-            )
-            return
-
-        started = self._worker_request(
-            "POST",
-            "/booth/multipart/start",
-            query={"key": key},
-            data=b"",
-            headers={"Content-Type": content_type},
+    def download_url(self, key: str) -> str:
+        return self.client.generate_presigned_url(
+            "get_object",
+            Params={"Bucket": self.config.bucket, "Key": key},
+            ExpiresIn=GUEST_LINK_EXPIRY_SECONDS,
         )
-        upload_id = started.get("upload_id")
-        if not isinstance(upload_id, str) or not upload_id:
-            raise RuntimeError("The gallery Worker did not start the large upload.")
-        parts: list[dict] = []
-        try:
-            with path.open("rb") as source:
-                part_number = 1
-                while chunk := source.read(MULTIPART_PART_SIZE):
-                    uploaded = self._worker_request(
-                        "PUT",
-                        "/booth/multipart/part",
-                        query={
-                            "key": key,
-                            "upload_id": upload_id,
-                            "part": str(part_number),
-                        },
-                        data=chunk,
-                        headers={"Content-Type": "application/octet-stream"},
-                    )
-                    etag = uploaded.get("etag")
-                    if not isinstance(etag, str) or not etag:
-                        raise RuntimeError(
-                            f"The gallery Worker did not confirm upload part {part_number}."
-                        )
-                    parts.append({"partNumber": part_number, "etag": etag})
-                    part_number += 1
-            self._worker_request(
-                "POST",
-                "/booth/multipart/complete",
-                data=json.dumps(
-                    {"key": key, "upload_id": upload_id, "parts": parts},
-                    separators=(",", ":"),
-                ).encode("utf-8"),
-                headers={"Content-Type": "application/json"},
-            )
-        except Exception:
-            try:
-                self._worker_request(
-                    "DELETE",
-                    "/booth/multipart",
-                    query={"key": key, "upload_id": upload_id},
-                )
-            except Exception:  # noqa: BLE001 - preserve the upload error
-                logger.warning("Could not abort failed Worker multipart upload %s", key)
-            raise
 
-    def _worker_delete_key(self, key: str) -> None:
-        self._worker_request("DELETE", "/booth/object", query={"key": key})
-
-    def _worker_request(
+    def _gallery_html(
         self,
-        method: str,
-        path: str,
-        *,
-        query: dict[str, str] | None = None,
-        data: bytes | None = None,
-        headers: dict[str, str] | None = None,
-    ) -> dict:
-        url = f"{self.config.public_base_url.rstrip('/')}{path}"
-        if query:
-            url = f"{url}?{urllib.parse.urlencode(query)}"
-        request = urllib.request.Request(
-            url,
-            method=method,
-            data=data,
-            headers={
-                "Authorization": f"Bearer {self.config.worker_token}",
-                "Cache-Control": "no-cache",
-                **(headers or {}),
-            },
+        event_id: str,
+        event_name: str,
+        event_date: str,
+    ) -> bytes:
+        prefix = f"{r2_event_prefix(event_id)}sessions/"
+        strip_keys: list[str] = []
+        continuation: str | None = None
+        while True:
+            args = {"Bucket": self.config.bucket, "Prefix": prefix}
+            if continuation:
+                args["ContinuationToken"] = continuation
+            response = self.client.list_objects_v2(**args)
+            strip_keys.extend(
+                item["Key"]
+                for item in response.get("Contents", [])
+                if item.get("Key", "").endswith("/strip.jpg")
+            )
+            if not response.get("IsTruncated"):
+                break
+            continuation = response.get("NextContinuationToken")
+            if not continuation:
+                raise RuntimeError("R2 returned an incomplete event listing.")
+        strip_keys.sort()
+        title = html.escape(event_name)
+        date = html.escape(event_date)
+        cards = "".join(
+            (
+                '<a class="strip" href="{url}" download>'
+                '<img src="{url}" alt="Photo strip {number}" loading="lazy">'
+                '<span>Download strip {number}</span></a>'
+            ).format(url=html.escape(self.download_url(key), quote=True), number=index)
+            for index, key in enumerate(strip_keys, 1)
         )
-        try:
-            with urllib.request.urlopen(request, timeout=45) as response:
-                raw = response.read()
-        except urllib.error.HTTPError as exc:
-            try:
-                detail = json.loads(exc.read()).get("error")
-            except Exception:  # noqa: BLE001 - response may not be JSON
-                detail = None
-            raise RuntimeError(
-                detail or f"The gallery Worker rejected the request ({exc.code})."
-            ) from exc
-        except OSError as exc:
-            raise RuntimeError("The gallery Worker could not be reached.") from exc
-        if not raw:
-            return {}
-        try:
-            return json.loads(raw)
-        except json.JSONDecodeError as exc:
-            raise RuntimeError("The gallery Worker returned an invalid response.") from exc
+        if not cards:
+            cards = "<p>No photo strips have uploaded yet.</p>"
+        archive_url = html.escape(
+            self.download_url(r2_event_archive_key(event_id)), quote=True
+        )
+        document = f"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src https:; style-src 'unsafe-inline';">
+<title>{title} — Piccie</title>
+<style>
+*{{box-sizing:border-box}}body{{margin:0;background:#fff7fb;color:#2c1723;font-family:Arial,sans-serif}}
+main{{width:min(1100px,100%);margin:auto;padding:40px 20px 80px}}header{{text-align:center;margin-bottom:32px}}
+h1{{margin:0 0 8px;font-size:clamp(2rem,7vw,4rem)}}p{{color:#6d5261}}.all{{display:inline-block;
+margin-top:12px;padding:12px 18px;border-radius:999px;background:#2c1723;color:white;text-decoration:none}}
+.grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:20px}}.strip{{display:flex;
+flex-direction:column;gap:10px;padding:12px;border-radius:18px;background:white;color:#2c1723;text-decoration:none;
+box-shadow:0 8px 30px #47243818}}.strip img{{width:100%;height:auto;border-radius:10px}}.strip span{{padding:4px 6px 8px}}
+</style></head><body><main><header><p>Piccie event gallery</p><h1>{title}</h1><p>{date}</p>
+<a class="all" href="{archive_url}" download>Download all photos</a></header>
+<section class="grid">{cards}</section></main></body></html>"""
+        return document.encode("utf-8")
 
     def verify_guest_download(
         self,
@@ -327,7 +246,7 @@ class R2Uploader:
         *,
         attempts: int = 5,
     ) -> None:
-        """Require the Worker to return the exact uploaded JPEG before success."""
+        """Require the signed private R2 URL to return the exact uploaded JPEG."""
         expected = expected_path.read_bytes()
         last_error: Exception | None = None
         for attempt in range(attempts):
@@ -347,6 +266,6 @@ class R2Uploader:
             if attempt < attempts - 1:
                 time.sleep(2)
         raise RuntimeError(
-            "R2 accepted the strip, but its guest link could not return it. "
-            "Check the Worker URL, R2 bucket binding, and venue internet access."
+            "R2 accepted the strip, but its signed download URL could not return it. "
+            "Check the R2 credentials, booth clock, and venue internet access."
         ) from last_error
