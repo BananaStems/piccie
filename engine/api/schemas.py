@@ -4,7 +4,7 @@ from datetime import date as calendar_date
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field, HttpUrl, field_validator, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class StatusResponse(BaseModel):
@@ -24,6 +24,7 @@ class StatusResponse(BaseModel):
     active_event_id: str | None = None
     admin_pin_set: bool = False
     onboarding_required: bool = False
+    r2_configured: bool = False
 
 
 class AdminUnlockRequest(BaseModel):
@@ -52,19 +53,9 @@ class WifiConnectRequest(BaseModel):
     hidden: bool = False
 
 
-class R2SetupRequest(BaseModel):
-    account_id: str = Field(min_length=1, max_length=64)
-    access_key: str = Field(min_length=1, max_length=256)
-    secret_key: str = Field(min_length=1, max_length=512)
-    bucket: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$")
-    public_base_url: HttpUrl
-    jurisdiction: Literal["default", "eu", "fedramp"] = "default"
-
-
 class OnboardingCompleteRequest(BaseModel):
     admin_pin: str = Field(min_length=4, max_length=8, pattern=r"^\d+$")
     ssh_authorized_key: str = Field(default="", max_length=1000)
-    r2: R2SetupRequest
 
     @field_validator("ssh_authorized_key")
     @classmethod

@@ -43,7 +43,6 @@ async def lifespan(app: FastAPI):
     # for the operator PIN before exposing settings again.
     app.state.admin_tokens = set()
     app.state.template_pairings = {}
-    app.state.onboarding_pairing = None
     app.state.onboarding_lock = threading.Lock()
     storage = Storage()
     app.state.storage = storage
@@ -82,14 +81,11 @@ def lan_request_allowed(host: str, path: str) -> bool:
             return True
     exact = {
         "/studio.html",
-        "/setup.html",
         "/css/studio.css",
-        "/css/setup.css",
         "/js/studio.js",
-        "/js/setup.js",
         "/assets/piccie-wordmark.svg",
     }
-    prefixes = ("/fonts/", "/api/studio/", "/api/setup/")
+    prefixes = ("/fonts/", "/api/studio/")
     return path in exact or path.startswith(prefixes)
 
 

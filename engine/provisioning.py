@@ -12,8 +12,8 @@ from engine.config import ConfigStore, R2Config
 from engine.r2 import R2Uploader
 
 
-def _public_r2_probe(config: R2Config) -> None:
-    """Upload and download a real private strip through the guest Worker."""
+def _r2_probe(config: R2Config) -> None:
+    """Upload and download a real strip through a signed private R2 URL."""
     uploader = R2Uploader(config)
     event_id = str(uuid.uuid4())
     session_id = str(uuid.uuid4())
@@ -50,11 +50,18 @@ def provision_booth(
     store: ConfigStore,
 ) -> None:
     """Validate storage and persist first-boot configuration."""
-    _public_r2_probe(R2Config(**payload["r2"]))
+    r2 = store.r2_from_local()
+    if not r2:
+        raise ValueError(
+            "R2 settings were not imported. Complete piccie-r2.txt on the microSD card."
+        )
+    _r2_probe(r2)
     local_config = data_dir / "local.json"
+    local = store.load_local_file() or {}
+    local["wifi_ssid"] = payload["wifi_ssid"]
     write_json_atomic(
         local_config,
-        {"wifi_ssid": payload["wifi_ssid"], "r2": payload["r2"]},
+        local,
     )
     local_config.chmod(0o600)
     config = store.ensure()

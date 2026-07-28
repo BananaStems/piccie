@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from engine.config import R2Config
-from engine.provisioning import _public_r2_probe
+from engine.provisioning import _r2_probe
 
 
 def test_r2_probe_uses_guest_strip_route_and_cleans_up(monkeypatch):
@@ -45,8 +45,8 @@ def test_r2_probe_uses_guest_strip_route_and_cleans_up(monkeypatch):
 
     monkeypatch.setattr("engine.provisioning.R2Uploader", FakeUploader)
 
-    _public_r2_probe(
-        R2Config("acct", "key", "secret", "photos", "https://gallery.example")
+    _r2_probe(
+        R2Config("acct", "key", "secret", "photos")
     )
 
     assert ".probe" in FakeUploader.uploaded_token
@@ -79,8 +79,8 @@ def test_r2_probe_fails_closed_on_wrong_guest_bytes_and_still_cleans(monkeypatch
     monkeypatch.setattr("engine.provisioning.R2Uploader", FakeUploader)
 
     with pytest.raises(RuntimeError, match="guest link unavailable"):
-        _public_r2_probe(
-            R2Config("acct", "key", "secret", "photos", "https://gallery.example")
+        _r2_probe(
+            R2Config("acct", "key", "secret", "photos")
         )
 
     assert len(FakeUploader.deleted) == 1

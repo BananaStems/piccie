@@ -2,7 +2,7 @@ export function renderOnboardingScreen({ app, state, render, api, escapeHtml, lo
   state.onboardingStep ||= "wifi";
 
   const shell = (step, title, copy, content, actions = "") => {
-    const stepNumber = { wifi: 1, pair: 2, providers: 2, r2: 2, booth: 3 }[step];
+    const stepNumber = { wifi: 1, storage: 2, finish: 3, booth: 3 }[step];
     app.innerHTML = `
       <div class="screen onboarding-screen">
         <header class="onboarding-header">
@@ -37,11 +37,12 @@ export function renderOnboardingScreen({ app, state, render, api, escapeHtml, lo
         <div class="onboarding-wifi-form" id="onboarding-wifi-form" hidden>
           <div class="onboarding-selected-network">
             <span>Connect to</span><strong id="onboarding-ssid"></strong>
-            <input id="onboarding-hidden-ssid" type="text" inputmode="none"
+            <input class="wifi-keyboard-anchor" id="onboarding-hidden-ssid" type="text" inputmode="none"
               autocomplete="off" placeholder="Hidden network name" hidden />
           </div>
           <div class="password-field" id="onboarding-password-field">
-            <input id="onboarding-wifi-password" type="password" inputmode="none"
+            <input class="wifi-keyboard-anchor wifi-password-anchor" id="onboarding-wifi-password"
+              type="password" inputmode="none"
               autocomplete="off" placeholder="Wi-Fi password" aria-label="Wi-Fi password" />
             <button class="btn btn-secondary password-toggle" type="button" id="onboarding-password-toggle">Show</button>
           </div>
@@ -124,7 +125,8 @@ export function renderOnboardingScreen({ app, state, render, api, escapeHtml, lo
       const selected = state.wifiNetworks.find((network) => network.ssid === state.wifiSelected);
       if (selected?.connected) {
         closeOnScreenKeyboard();
-        state.onboardingStep = "pair";
+        state.status = await api.status();
+        state.onboardingStep = "storage";
         render();
         return;
       }
@@ -148,7 +150,7 @@ export function renderOnboardingScreen({ app, state, render, api, escapeHtml, lo
           button.removeAttribute("aria-busy");
           return;
         }
-        state.onboardingStep = "pair";
+        state.onboardingStep = "storage";
         render();
       } catch (error) {
         message.className = "wifi-msg onboarding-wifi-message error";
@@ -163,125 +165,53 @@ export function renderOnboardingScreen({ app, state, render, api, escapeHtml, lo
     loadNetworks();
   };
 
-  const leavePairing = async (nextStep) => {
-    try {
-      await api.revokeOnboardingPairing();
-    } catch {
-      // The code expires quickly and a new one always replaces it.
-    }
-    state.onboardingPairing = null;
-    state.onboardingStep = nextStep;
-    render();
-  };
-
-  const showPair = () => {
-    if (!state.onboardingPairing) {
-      shell(
-        "pair",
-        "Continue on your phone",
-        "Piccie is creating a private setup link for this booth.",
-        `<div class="centered"><div class="spinner"></div><p class="onboarding-submit-message" id="onboarding-pair-message">Creating setup code…</p></div>`,
-        `<button class="btn btn-secondary" type="button" id="onboarding-pair-back">Back</button>
-         <button class="btn btn-secondary" type="button" id="onboarding-pair-local">Enter on booth</button>`,
-      );
-      document.getElementById("onboarding-pair-back").onclick = () => leavePairing("wifi");
-      document.getElementById("onboarding-pair-local").onclick = () => leavePairing("providers");
-      api.pairOnboarding().then((pairing) => {
-        if (state.onboardingStep !== "pair") return;
-        state.onboardingPairing = pairing;
-        render();
-      }).catch((error) => {
-        const message = document.getElementById("onboarding-pair-message");
-        if (!message) return;
-        message.className = "onboarding-submit-message error-text";
-        message.textContent = error.message;
-      });
-      return;
-    }
-
-    const pairing = state.onboardingPairing;
+  const showStorage = () => {
+    const configured = Boolean(state.status?.r2_configured);
     shell(
-      "pair",
-      "Continue on your phone",
-      `Scan this code with a device connected to ${escapeHtml(pairing.wifi_ssid)}. The private link expires in 15 minutes.`,
-      `<div class="onboarding-pairing">
-          <img class="onboarding-pair-qr" src="/api/qr?data=${encodeURIComponent(pairing.url)}" alt="QR code for phone setup" />
-          <div class="onboarding-pair-copy">
-            <p>Cloudflare credentials stay out of the QR code. The code only contains a one-time link to this booth.</p>
-            <span>If scanning fails, enter the full one-time address:</span>
-            <code>${escapeHtml(pairing.url)}</code>
-          </div>
-        </div>`,
-      `<button class="btn btn-secondary" type="button" id="onboarding-pair-back">Back</button>
-       <button class="btn btn-secondary" type="button" id="onboarding-pair-local">Enter on booth</button>
-       <button class="btn" type="button" id="onboarding-pair-new">New code</button>`,
+      "storage",
+      configured ? "Cloud storage is ready" : "Cloud storage file not found",
+      configured
+        ? "Piccie securely imported the R2 settings you added to the microSD card."
+        : "Piccie needs the completed piccie-r2.txt file from the microSD boot partition.",
+      configured
+        ? `<div class="provider-card provider-card-r2 onboarding-storage-ready">
+            <span class="provider-logo">R2</span>
+            <span class="provider-copy"><strong>Cloudflare R2 connected</strong><small>The readable credential file has been removed</small></span>
+            <span class="wifi-badge">Ready</span>
+          </div>`
+        : `<div class="onboarding-storage-missing">
+            <p><strong>To finish setup:</strong></p>
+            <ol>
+              <li>Shut down Piccie.</li>
+              <li>Put the microSD card in your computer.</li>
+              <li>Open the boot drive and complete <code>piccie-r2.txt</code>.</li>
+              <li>If present, check <code>piccie-r2-status.txt</code> for the exact field to fix.</li>
+              <li>Safely eject the card, return it to Piccie and power on.</li>
+            </ol>
+            <p>The file itself contains the complete Cloudflare instructions.</p>
+          </div>`,
+      `<button class="btn btn-secondary" type="button" id="onboarding-storage-back">Back</button>
+       ${configured
+         ? '<button class="btn" type="button" id="onboarding-storage-continue">Continue</button>'
+         : '<button class="btn btn-secondary" type="button" id="onboarding-storage-retry">Check again</button><button class="btn" type="button" id="onboarding-storage-shutdown">Shut down</button>'}`,
     );
-    document.getElementById("onboarding-pair-back").onclick = () => leavePairing("wifi");
-    document.getElementById("onboarding-pair-local").onclick = () => leavePairing("providers");
-    document.getElementById("onboarding-pair-new").onclick = () => {
-      state.onboardingPairing = null;
+    document.getElementById("onboarding-storage-back").onclick = () => {
+      state.onboardingStep = "wifi";
       render();
     };
-  };
-
-  const showProviders = () => {
-    shell(
-      "providers",
-      "Choose your storage",
-      "Your booth keeps a local copy and uploads finished strips to your provider.",
-      `<button class="provider-card provider-card-r2" type="button" id="provider-r2">
-          <span class="provider-logo">R2</span>
-          <span class="provider-copy"><strong>Cloudflare R2</strong><small>Connect your bucket</small></span>
-          <span class="provider-arrow" aria-hidden="true">→</span>
-        </button>
-        <div class="provider-coming-soon">
-          <div><strong>Amazon S3</strong><span>Coming soon</span></div>
-          <div><strong>Google Drive</strong><span>Coming soon</span></div>
-        </div>`,
-      `<button class="btn btn-secondary" type="button" id="onboarding-provider-back">Back</button>`,
-    );
-    document.getElementById("provider-r2").onclick = () => {
-      state.onboardingStep = "r2";
-      render();
-    };
-    document.getElementById("onboarding-provider-back").onclick = () => {
-      state.onboardingStep = "pair";
-      render();
-    };
-  };
-
-  const showR2 = () => {
-    const saved = state.onboardingR2 || {};
-    shell(
-      "r2",
-      "Connect Cloudflare R2",
-      "Deploy the self-hosted gallery Worker, then enter its URL and an Object Read & Write token restricted to the same bucket.",
-      `<form class="onboarding-fields" id="onboarding-r2-form">
-          <label>Account ID<input name="account_id" value="${escapeHtml(saved.account_id || "")}" autocomplete="off" required /></label>
-          <label>Bucket<input name="bucket" value="${escapeHtml(saved.bucket || "")}" autocomplete="off" pattern="[a-z0-9][a-z0-9-]{1,61}[a-z0-9]" required /></label>
-          <label class="field-wide">Access Key ID<input name="access_key" value="${escapeHtml(saved.access_key || "")}" autocomplete="off" required /></label>
-          <label class="field-wide">Secret Access Key<input name="secret_key" value="${escapeHtml(saved.secret_key || "")}" type="password" autocomplete="off" required /></label>
-          <label class="field-wide">Gallery Worker URL<input name="public_base_url" value="${escapeHtml(saved.public_base_url || "")}" type="url" inputmode="url" placeholder="https://piccie-gallery.example.workers.dev" required /></label>
-          <label>Jurisdiction<select name="jurisdiction">
-            <option value="default">Default</option><option value="eu">European Union</option><option value="fedramp">FedRAMP</option>
-          </select></label>
-        </form>`,
-      `<button class="btn btn-secondary" type="button" id="onboarding-r2-back">Back</button>
-       <button class="btn" type="submit" form="onboarding-r2-form">Continue</button>`,
-    );
-    document.querySelector('[name="jurisdiction"]').value = saved.jurisdiction || "default";
-    document.getElementById("onboarding-r2-back").onclick = () => {
-      state.onboardingStep = "providers";
-      render();
-    };
-    document.getElementById("onboarding-r2-form").onsubmit = (event) => {
-      event.preventDefault();
-      const data = new FormData(event.currentTarget);
-      state.onboardingR2 = Object.fromEntries(data.entries());
+    document.getElementById("onboarding-storage-continue")?.addEventListener("click", () => {
       state.onboardingStep = "finish";
-      closeOnScreenKeyboard();
       render();
-    };
+    });
+    document.getElementById("onboarding-storage-retry")?.addEventListener("click", async () => {
+      state.status = await api.status();
+      render();
+    });
+    document.getElementById("onboarding-storage-shutdown")?.addEventListener("click", async (event) => {
+      event.currentTarget.disabled = true;
+      event.currentTarget.textContent = "Shutting down…";
+      await api.shutdown();
+    });
   };
 
   const showFinish = () => {
@@ -298,7 +228,7 @@ export function renderOnboardingScreen({ app, state, render, api, escapeHtml, lo
        <button class="btn" type="submit" form="onboarding-finish-form" id="onboarding-finish-button">Finish setup</button>`,
     );
     document.getElementById("onboarding-finish-back").onclick = () => {
-      state.onboardingStep = "r2";
+      state.onboardingStep = "storage";
       render();
     };
     document.getElementById("onboarding-finish-form").onsubmit = async (event) => {
@@ -314,7 +244,6 @@ export function renderOnboardingScreen({ app, state, render, api, escapeHtml, lo
         await api.completeOnboarding({
           admin_pin: pin,
           ssh_authorized_key: data.get("ssh_authorized_key"),
-          r2: state.onboardingR2,
         });
         state.onboardingStep = "restart";
         render();
@@ -360,9 +289,7 @@ export function renderOnboardingScreen({ app, state, render, api, escapeHtml, lo
 
   ({
     wifi: showWifi,
-    pair: showPair,
-    providers: showProviders,
-    r2: showR2,
+    storage: showStorage,
     finish: showFinish,
     restart: showRestart,
   }[state.onboardingStep] || showWifi)();

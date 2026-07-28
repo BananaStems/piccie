@@ -7,7 +7,6 @@ import secrets
 import socket
 import tempfile
 import threading
-import time
 import zipfile
 from pathlib import Path
 
@@ -58,7 +57,6 @@ from engine.version import APP_VERSION, BUILD_ID
 from engine.wifi import connect_network, current_ssid, list_networks
 
 router = APIRouter(prefix="/api")
-SETUP_PAIRING_TTL_SECONDS = 15 * 60
 
 
 def _ready_config(request: Request) -> AppConfig:
@@ -91,20 +89,6 @@ def _onboarding_pending() -> bool:
     return not (_onboarding_data_dir() / ".provisioned").exists()
 
 
-def _require_setup_pairing(request: Request) -> dict:
-    token = request.headers.get("X-Setup-Token", "")
-    pairing = getattr(request.app.state, "onboarding_pairing", None)
-    if not _onboarding_pending():
-        request.app.state.onboarding_pairing = None
-        raise HTTPException(409, "This booth is already configured.")
-    if not pairing or not token or not secrets.compare_digest(token, pairing["token"]):
-        raise HTTPException(401, "This setup link is no longer active. Scan a new code on the booth.")
-    if time.monotonic() >= pairing["expires_at"]:
-        request.app.state.onboarding_pairing = None
-        raise HTTPException(401, "This setup link has expired. Scan a new code on the booth.")
-    return pairing
-
-
 def _lan_ip() -> str:
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
@@ -128,6 +112,12 @@ def _complete_onboarding(request: Request, body: OnboardingCompleteRequest) -> d
         ssid = current_ssid()
         if not ssid:
             raise HTTPException(400, "Connect the booth to Wi-Fi first.")
+        if not store.r2_from_local():
+            raise HTTPException(
+                400,
+                "R2 settings were not found. Shut down Piccie and complete "
+                "piccie-r2.txt on the microSD boot partition.",
+            )
         payload = body.model_dump(mode="json")
         payload["wifi_ssid"] = ssid
         try:
@@ -155,6 +145,7 @@ def status(request: Request) -> StatusResponse:
         wifi_ssid=current_ssid(),
         active_event_id=config.active_event_id,
         admin_pin_set=config.admin_pin_set,
+        r2_configured=config.r2 is not None,
         onboarding_required=(
             not appliance_qemu()
             and os.environ.get("PICCIE_ONBOARDING") == "1"
@@ -300,52 +291,6 @@ def admin_preflight(request: Request) -> dict:
 @router.post("/onboarding/complete")
 def onboarding_complete(request: Request, body: OnboardingCompleteRequest) -> dict:
     return _complete_onboarding(request, body)
-
-
-@router.post("/onboarding/pair")
-def pair_phone_onboarding(request: Request) -> dict:
-    if not _onboarding_pending():
-        raise HTTPException(409, "This booth is already configured.")
-    ssid = current_ssid()
-    if not ssid:
-        raise HTTPException(400, "Connect the booth to Wi-Fi first.")
-    host = _lan_ip()
-    if host == "127.0.0.1":
-        raise HTTPException(503, "Could not determine this booth's Wi-Fi address.")
-    token = secrets.token_urlsafe(32)
-    request.app.state.onboarding_pairing = {
-        "token": token,
-        "expires_at": time.monotonic() + SETUP_PAIRING_TTL_SECONDS,
-    }
-    return {
-        "url": f"http://{host}:8080/setup.html#token={token}",
-        "wifi_ssid": ssid,
-        "expires_in": SETUP_PAIRING_TTL_SECONDS,
-    }
-
-
-@router.delete("/onboarding/pair")
-def revoke_phone_onboarding(request: Request) -> dict:
-    request.app.state.onboarding_pairing = None
-    return {"ok": True}
-
-
-@router.get("/setup/status")
-def phone_setup_status(request: Request) -> dict:
-    pairing = _require_setup_pairing(request)
-    return {
-        "ok": True,
-        "wifi_ssid": current_ssid(),
-        "expires_in": max(0, int(pairing["expires_at"] - time.monotonic())),
-    }
-
-
-@router.post("/setup/complete")
-def phone_setup_complete(request: Request, body: OnboardingCompleteRequest) -> dict:
-    _require_setup_pairing(request)
-    result = _complete_onboarding(request, body)
-    request.app.state.onboarding_pairing = None
-    return result
 
 
 @router.get("/settings/camera")

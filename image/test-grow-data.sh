@@ -387,6 +387,22 @@ test_safe_shutdown_uses_narrow_privileged_helper() {
   assert_not_contains "${sudoers}" "/usr/bin/systemctl"
 }
 
+test_r2_boot_file_is_imported_before_engine_start() {
+  local setup="${REPO_ROOT}/image/setup-appliance.sh"
+  local engine_unit="${REPO_ROOT}/image/piccie-engine.service"
+  local template="${REPO_ROOT}/image/files/piccie-r2.txt"
+
+  assert_contains "${setup}" "/boot/firmware/piccie-r2.txt"
+  assert_contains "${setup}" "! -e /boot/firmware/piccie-r2.txt"
+  assert_contains "${engine_unit}" "ExecStartPre=+/opt/piccie/venv/bin/python -m engine.r2_boot_config"
+  assert_contains "${template}" "ACCOUNT_ID="
+  assert_contains "${template}" "ACCESS_KEY_ID="
+  assert_contains "${template}" "SECRET_ACCESS_KEY="
+  assert_contains "${template}" "BUCKET_NAME=piccie-photos"
+  assert_contains "${template}" "Object Read & Write"
+  assert_not_contains "${template}" "PUBLIC_URL="
+}
+
 run_test() {
   local name="$1"
   "$name"
@@ -412,5 +428,6 @@ run_test test_filesystem_resize_must_verify
 run_test test_systemd_ordering_keeps_growth_offline
 run_test test_provisioning_triggers_one_time_lockdown
 run_test test_safe_shutdown_uses_narrow_privileged_helper
+run_test test_r2_boot_file_is_imported_before_engine_start
 
 echo "PASS: ${PASS_COUNT} piccie-grow-data tests"

@@ -5,8 +5,9 @@ steps are:
 
 1. Download the Piccie image, or build it yourself.
 2. Flash the image to a microSD card.
-3. Start the Raspberry Pi and complete onboarding.
-4. Test the booth, then run the soak test before using it at an event.
+3. Add the one-time R2 configuration file.
+4. Start the Raspberry Pi and complete onboarding.
+5. Test the booth, then run the soak test before using it at an event.
 
 ## What you need
 
@@ -146,7 +147,48 @@ To continue a failed full build without starting again:
 
 Writing the image erases the selected card. Check the storage target carefully.
 
-## 3. Complete first boot
+## 3. Add your R2 settings
+
+After Raspberry Pi Imager finishes, remove and reinsert the microSD card if its
+boot drive is not visible. The drive works on macOS, Windows and Linux.
+
+1. Open `piccie-r2.txt` on the microSD boot drive. The file contains the same
+   instructions and blank settings to complete.
+2. Sign in to the [Cloudflare dashboard](https://dash.cloudflare.com/), open
+   **Storage & databases → R2**, and create a bucket named `piccie-photos`.
+   Leave the bucket private.
+3. On the R2 Overview page, find **Account Details → API Tokens** and select
+   **Manage**.
+4. Create an **Account API token** with **Object Read & Write** permission.
+   Restrict the token to only the `piccie-photos` bucket.
+5. Copy the Account ID, Access Key ID and Secret Access Key into the matching
+   lines in `piccie-r2.txt`. Cloudflare shows the secret only once.
+6. Leave `JURISDICTION=default` unless the bucket was explicitly created in the
+   EU or FedRAMP jurisdiction.
+7. Save the file and safely eject the microSD card.
+
+The file should contain only these settings after the comment instructions:
+
+```ini
+ACCOUNT_ID=your-32-character-account-id
+ACCESS_KEY_ID=your-r2-access-key-id
+SECRET_ACCESS_KEY=your-r2-secret-access-key
+BUCKET_NAME=piccie-photos
+JURISDICTION=default
+```
+
+Piccie validates and moves these values into the writable data partition before
+the engine starts, then removes the readable credential copy from the boot
+drive. It refuses incomplete files, unknown settings and degraded temporary
+storage. If validation fails, shut down and open `piccie-r2-status.txt` on the
+boot drive for the exact field to correct. The token should never grant access
+to any other bucket.
+
+R2 remains private. Piccie creates signed guest download links that work for
+seven days, which is Cloudflare's maximum. Generate a new event link from the
+booth if an older event needs to be shared again.
+
+## 4. Complete first boot
 
 Before powering on, connect the touchscreen, camera, active cooling and a
 reliable Raspberry Pi power supply. On the first power-on, Piccie expands the
@@ -155,27 +197,17 @@ remove power or the card during that restart.
 
 1. Insert the flashed microSD card and power on the booth.
 2. Choose the Wi-Fi network used for initial setup.
-3. Scan the one-time QR code with a phone or computer connected to the same
-   Wi-Fi. The code uses the booth's current IP address, expires after 15
-   minutes and contains no Cloudflare credentials.
-4. On that device, enter the bucket credentials and Worker URL created with
-   the [self-hosted gallery guide](../cloud/README.md).
-5. Choose an operator PIN.
-6. Add your computer's SSH public key if you want remote updates and access to
-   the soak test, then finish setup. You can select **Enter on booth** instead
-   if the Wi-Fi prevents devices from communicating with each other.
+3. Confirm that Piccie found and securely imported the R2 file.
+4. Choose an operator PIN.
+5. Add your computer's SSH public key if you want remote updates and access to
+   the soak test, then finish setup.
 
-Piccie uploads a temporary private strip and downloads it through the guest
-Worker before completing onboarding. It then restarts once more to enable the
+Piccie uploads a temporary private strip and downloads it through a signed R2
+link before completing onboarding. It then restarts once more to enable the
 read-only system protection. Keep power connected until the admin screen
-appears. The phone link becomes invalid as soon as setup succeeds. The bucket
-remains private and no custom domain is required.
+appears.
 
-Guest or venue Wi-Fi may enable client isolation, which blocks the phone from
-reaching the booth even when both show the same network name. Use a private
-router/hotspot for setup or enter the details on the booth in that case.
-
-## 4. Check the booth
+## 5. Check the booth
 
 Before a long reliability run:
 
@@ -190,7 +222,7 @@ Before a long reliability run:
    until the display is black and the green activity light has stopped before
    disconnecting power. Avoid unplugging a running booth.
 
-## 5. Run the soak test
+## 6. Run the soak test
 
 Run a powered soak test after assembling the booth, changing performance mode,
 changing cooling or rebuilding the image. Eight hours is recommended before the

@@ -5,7 +5,6 @@
     "access_key": "your-r2-access-key-id",
     "secret_key": "your-r2-secret-access-key",
     "bucket": "piccie-photos",
-    "public_base_url": "https://piccie-gallery.your-account.workers.dev",
     "jurisdiction": "default"
   }
 }

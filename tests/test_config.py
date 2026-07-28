@@ -26,7 +26,7 @@ def test_config_json_never_contains_r2_secrets(store):
     local = store.path.parent / "local.json"
     local.write_text(
         '{"r2":{"account_id":"acc","access_key":"key","secret_key":"secret",'
-        '"bucket":"bucket","public_base_url":"https://cdn.example.com"}}'
+        '"bucket":"bucket"}}'
     )
     config = store.ensure()
     assert config.r2 is not None

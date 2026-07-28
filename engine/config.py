@@ -24,11 +24,10 @@ LOCAL_CONFIG_PATH = Path(
 
 @dataclass
 class R2Config:
-    account_id: str
-    access_key: str
-    secret_key: str
-    bucket: str
-    public_base_url: str
+    account_id: str = ""
+    access_key: str = ""
+    secret_key: str = ""
+    bucket: str = ""
     jurisdiction: str = "default"
 
 
@@ -50,7 +49,7 @@ class AppConfig:
 class ConfigStore:
     """Persist non-secret booth state.
 
-    R2 credentials live only in the root-readable local configuration file. The
+    R2 credentials live only in the mode-0600 local configuration file. The
     previous second, device-derived encrypted copy in config.json did not add a
     security boundary: the key and ciphertext were on the same device.
     """
@@ -162,7 +161,12 @@ class ConfigStore:
         r2_raw = local.get("r2")
         if not r2_raw:
             return None
-        required = ("account_id", "access_key", "secret_key", "bucket", "public_base_url")
+        required = (
+            "account_id",
+            "access_key",
+            "secret_key",
+            "bucket",
+        )
         if not all(r2_raw.get(key) for key in required):
             return None
         return R2Config(
@@ -170,6 +174,5 @@ class ConfigStore:
             access_key=r2_raw["access_key"],
             secret_key=r2_raw["secret_key"],
             bucket=r2_raw["bucket"],
-            public_base_url=r2_raw["public_base_url"],
             jurisdiction=r2_raw.get("jurisdiction", "default"),
         )

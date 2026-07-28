@@ -1,9 +1,9 @@
 from engine.paths import (
     r2_event_archive_key,
+    r2_event_gallery_key,
     r2_event_manifest_key,
     r2_event_strip_key,
     r2_session_target,
-    r2_share_key,
     slugify,
 )
 
@@ -21,5 +21,6 @@ def test_private_event_keys():
     assert r2_event_manifest_key(event) == f"events/{event}/manifest.json"
     assert r2_event_archive_key(event) == f"events/{event}/download-all.zip"
     assert r2_session_target(event, session) == f"event-session:{event}:{session}"
-    assert r2_share_key(event, token).startswith(f"events/{event}/shares/")
-    assert token not in r2_share_key(event, token)
+    assert r2_event_gallery_key(event, token).startswith(f"events/{event}/shares/")
+    assert r2_event_gallery_key(event, token).endswith(".html")
+    assert token not in r2_event_gallery_key(event, token)

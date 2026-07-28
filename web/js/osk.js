@@ -192,6 +192,18 @@ function clearInputOskState(input) {
   input.classList.remove("osk-target");
 }
 
+export function scrollBlockForInput(input) {
+  return input?.classList.contains("wifi-password-anchor") ? "end" : "center";
+}
+
+function scrollInputAboveKeyboard(input, behavior = "auto") {
+  input.scrollIntoView({
+    behavior,
+    block: scrollBlockForInput(input),
+    inline: "nearest",
+  });
+}
+
 function openFor(input) {
   if (activeInput && activeInput !== input) clearInputOskState(activeInput);
   activeInput = input;
@@ -204,18 +216,23 @@ function openFor(input) {
   boothFrame.classList.add("osk-open");
   panelEl.hidden = false;
   renderKeys();
-  // Centre the field in the scroll area (which reserves keyboard space via
-  // scroll-padding) so a field low on the screen lifts clear of the keyboard.
-  // "nearest" wouldn't scroll — the scrollport extends under the keyboard.
-  // Reading offsetHeight forces the just-added osk-open layout (the padding that
-  // makes the column scrollable) to apply, then we scroll synchronously.
+  // Reading offsetHeight applies the temporary scroll space before positioning.
+  // Wi-Fi fields align to the visible bottom edge; other fields remain centred.
   void input.offsetHeight;
-  input.scrollIntoView({ block: "center" });
+  scrollInputAboveKeyboard(input);
+  requestAnimationFrame(() => {
+    if (activeInput === input && isKeyboardOpen()) {
+      scrollInputAboveKeyboard(input, "smooth");
+    }
+  });
 }
 
 export function closeOnScreenKeyboard() {
   if (!isKeyboardOpen() && !activeInput) return;
 
+  const wifiScrollContainer = activeInput?.classList.contains("wifi-keyboard-anchor")
+    ? activeInput.closest(".wifi-screen, .onboarding-panel")
+    : null;
   if (activeInput) {
     clearInputOskState(activeInput);
     activeInput.blur();
@@ -224,6 +241,7 @@ export function closeOnScreenKeyboard() {
   shifted = false;
   textMode = "letters";
   boothFrame?.classList.remove("osk-open");
+  if (wifiScrollContainer) wifiScrollContainer.scrollTop = 0;
   if (panelEl) panelEl.hidden = true;
 }
 

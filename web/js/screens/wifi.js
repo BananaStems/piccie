@@ -111,10 +111,12 @@ export function renderWifiScreen({ app, state, api, escapeHtml, closeOnScreenKey
       <div class="wifi-connect" id="wifi-connect" hidden>
         <div class="form-group">
           <label>Network <span id="wifi-ssid-label"></span>
-            <input id="wifi-hidden-ssid" type="text" inputmode="none" autocomplete="off" placeholder="Hidden network name" hidden />
+            <input class="wifi-keyboard-anchor" id="wifi-hidden-ssid" type="text"
+              inputmode="none" autocomplete="off" placeholder="Hidden network name" hidden />
           </label>
           <div class="password-field">
-            <input id="wifi-pw" type="password" inputmode="none" autocomplete="off" />
+            <input class="wifi-keyboard-anchor wifi-password-anchor" id="wifi-pw" type="password"
+              inputmode="none" autocomplete="off" />
             <button class="btn btn-secondary password-toggle" type="button" id="wifi-pw-toggle">Show</button>
           </div>
         </div>
@@ -124,6 +126,7 @@ export function renderWifiScreen({ app, state, api, escapeHtml, closeOnScreenKey
           <button class="btn btn-secondary" type="button" id="wifi-cancel-btn">Cancel</button>
         </div>
       </div>
+      <div class="wifi-keyboard-spacer" aria-hidden="true"></div>
       <nav class="bottom-bar" aria-label="Wi-Fi actions">
         <button class="btn btn-secondary" type="button" id="wifi-back">Back</button>
         <button class="btn btn-secondary" type="button" id="wifi-refresh">Refresh</button>
