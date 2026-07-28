@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="referrer" content="no-referrer" />
   <meta http-equiv="Content-Security-Policy"
-    content="default-src 'self'; connect-src 'self'; font-src 'self'; img-src 'self' data:; script-src 'self'; style-src 'self'; base-uri 'none'; form-action 'self'" />
+    content="default-src 'self'; connect-src 'self' https:; font-src 'self'; img-src 'self' data:; script-src 'self'; style-src 'self'; base-uri 'none'; form-action 'self'" />
   <title>Set up Piccie</title>
   <link rel="stylesheet" href="/css/setup.css" />
 </head>
@@ -24,44 +24,76 @@
 
     <section class="setup-card" id="setup-form-card" hidden>
       <p class="eyebrow">Connected to <strong id="setup-wifi"></strong></p>
-      <h1>Connect Cloudflare R2</h1>
-      <p>Enter the credentials for the private bucket and gallery Worker used by this booth.</p>
-      <p>Use a trusted private Wi-Fi network. This direct local connection uses HTTP.</p>
+      <h1>Connect your gallery</h1>
+      <p>Deploy Piccie Gallery to your Cloudflare account, then pair it to this booth once.</p>
 
-      <form id="setup-form">
-        <label>
-          Account ID
-          <input name="account_id" autocomplete="off" maxlength="64" required />
-        </label>
-        <label>
-          Bucket
-          <input name="bucket" autocomplete="off" autocapitalize="none"
-            pattern="[a-z0-9][a-z0-9-]{1,61}[a-z0-9]" required />
-        </label>
-        <label>
-          Access Key ID
-          <input name="access_key" autocomplete="off" autocapitalize="none" required />
-        </label>
-        <label>
-          Secret Access Key
-          <span class="secret-field">
-            <input name="secret_key" type="password" autocomplete="off" autocapitalize="none" required />
-            <button type="button" id="setup-secret-toggle">Show</button>
-          </span>
-        </label>
+      <div class="claim-panel" id="setup-claim-panel">
+        <a class="deploy-button"
+          href="https://deploy.workers.cloudflare.com/?url=https://github.com/BananaStems/piccie/tree/main/cloud"
+          target="_blank" rel="noopener noreferrer">Deploy to Cloudflare</a>
+        <p>Cloudflare creates the private photo bucket and gallery Worker. Return here with the Worker URL and setup key shown during deployment.</p>
         <label>
           Gallery Worker URL
-          <input name="public_base_url" type="url" inputmode="url" autocomplete="off"
-            autocapitalize="none" placeholder="https://piccie-gallery.example.workers.dev" required />
+          <input id="setup-worker-url" type="url" inputmode="url" autocomplete="off"
+            autocapitalize="none" placeholder="https://piccie-gallery.example.workers.dev" />
         </label>
         <label>
-          Jurisdiction
-          <select name="jurisdiction">
-            <option value="default">Default</option>
-            <option value="eu">European Union</option>
-            <option value="fedramp">FedRAMP</option>
-          </select>
+          One-time setup key
+          <span class="secret-field">
+            <input id="setup-claim-key" type="password" autocomplete="off"
+              autocapitalize="none" minlength="24" maxlength="256" />
+            <button type="button" id="setup-claim-key-toggle">Show</button>
+          </span>
         </label>
+        <button class="cloudflare-button" id="setup-claim" type="button">
+          Connect gallery
+        </button>
+        <p id="setup-claim-message" role="status">
+          The setup key works for one booth only and is never saved on the booth.
+        </p>
+      </div>
+
+      <form id="setup-form">
+        <input name="worker_token" type="hidden" />
+        <details class="manual-settings" id="setup-manual">
+          <summary>Use R2 API credentials instead</summary>
+          <p>Advanced fallback for an existing R2 bucket and Worker.</p>
+          <div class="manual-fields">
+            <label>
+              Account ID
+              <input name="account_id" autocomplete="off" maxlength="64" />
+            </label>
+            <label>
+              Bucket
+              <input name="bucket" autocomplete="off" autocapitalize="none"
+                pattern="[a-z0-9][a-z0-9-]{1,61}[a-z0-9]" />
+            </label>
+            <label class="field-wide">
+              Access Key ID
+              <input name="access_key" autocomplete="off" autocapitalize="none" />
+            </label>
+            <label class="field-wide">
+              Secret Access Key
+              <span class="secret-field">
+                <input name="secret_key" type="password" autocomplete="off" autocapitalize="none" />
+                <button type="button" id="setup-secret-toggle">Show</button>
+              </span>
+            </label>
+            <label class="field-wide">
+              Gallery Worker URL
+              <input name="public_base_url" type="url" inputmode="url" autocomplete="off"
+                autocapitalize="none" placeholder="https://piccie-gallery.example.workers.dev" />
+            </label>
+            <label>
+              Jurisdiction
+              <select name="jurisdiction">
+                <option value="default">Default</option>
+                <option value="eu">European Union</option>
+                <option value="fedramp">FedRAMP</option>
+              </select>
+            </label>
+          </div>
+        </details>
 
         <hr />
 

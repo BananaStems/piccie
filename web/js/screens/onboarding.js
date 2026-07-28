@@ -37,11 +37,12 @@ export function renderOnboardingScreen({ app, state, render, api, escapeHtml, lo
         <div class="onboarding-wifi-form" id="onboarding-wifi-form" hidden>
           <div class="onboarding-selected-network">
             <span>Connect to</span><strong id="onboarding-ssid"></strong>
-            <input id="onboarding-hidden-ssid" type="text" inputmode="none"
+            <input class="wifi-keyboard-anchor" id="onboarding-hidden-ssid" type="text" inputmode="none"
               autocomplete="off" placeholder="Hidden network name" hidden />
           </div>
           <div class="password-field" id="onboarding-password-field">
-            <input id="onboarding-wifi-password" type="password" inputmode="none"
+            <input class="wifi-keyboard-anchor wifi-password-anchor" id="onboarding-wifi-password"
+              type="password" inputmode="none"
               autocomplete="off" placeholder="Wi-Fi password" aria-label="Wi-Fi password" />
             <button class="btn btn-secondary password-toggle" type="button" id="onboarding-password-toggle">Show</button>
           </div>

@@ -1,9 +1,27 @@
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const BOOTH_TOKEN = /^[A-Za-z0-9_-]{40,128}$/;
+const OBJECT_KEY = new RegExp(
+  `^events/${UUID.source.slice(1, -1)}/(?:manifest\\.json|download-all\\.zip|sessions/${UUID.source.slice(1, -1)}/strip\\.jpg|shares/[0-9a-f]{64}\\.json)$`,
+  "i",
+);
+const PREFIX_KEY = new RegExp(
+  `^events/${UUID.source.slice(1, -1)}/(?:sessions/(?:${UUID.source.slice(1, -1)}/)?)?$`,
+  "i",
+);
 
 export default {
   async fetch(request, env) {
-    if (request.method !== "GET" && request.method !== "HEAD") return response("Not found", 404);
     const url = new URL(request.url);
+    if (url.pathname === "/claim" && request.method === "OPTIONS") {
+      return claimPreflight(request);
+    }
+    if (url.pathname === "/claim" && request.method === "POST") {
+      return claimBooth(request, env);
+    }
+    if (url.pathname.startsWith("/booth/")) {
+      return boothRequest(request, env, url);
+    }
+    if (request.method !== "GET" && request.method !== "HEAD") return response("Not found", 404);
     let parts;
     try {
       parts = url.pathname.split("/").filter(Boolean).map(decodeURIComponent);
@@ -21,6 +39,330 @@ export default {
     return response("Not found", 404);
   },
 };
+
+function localSetupUrl(value) {
+  let url;
+  try {
+    url = new URL(value);
+  } catch {
+    return null;
+  }
+  if (
+    url.protocol !== "http:"
+    || url.port !== "8080"
+    || url.pathname !== "/setup.html"
+    || url.search
+    || url.hash
+    || url.username
+    || url.password
+    || !privateHostname(url.hostname)
+  ) {
+    return null;
+  }
+  return url;
+}
+
+function privateHostname(hostname) {
+  const lowered = hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  if (lowered === "localhost" || lowered === "::1") return true;
+  const match = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(hostname);
+  if (match) {
+    const octets = match.slice(1).map(Number);
+    if (octets.some((part) => part > 255)) return false;
+    return (
+      octets[0] === 10
+      || octets[0] === 127
+      || (octets[0] === 169 && octets[1] === 254)
+      || (octets[0] === 172 && octets[1] >= 16 && octets[1] <= 31)
+      || (octets[0] === 192 && octets[1] === 168)
+    );
+  }
+  if (!lowered.includes(":")) return false;
+  return /^(fc|fd)/.test(lowered) || /^fe[89ab]/.test(lowered);
+}
+
+function claimCors(origin) {
+  const headers = new Headers({
+    "Access-Control-Allow-Methods": "POST, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type",
+    "Access-Control-Max-Age": "600",
+    "Cache-Control": "private, no-store",
+    "Vary": "Origin",
+  });
+  const parsed = localSetupUrl(`${origin}/setup.html`);
+  if (parsed) headers.set("Access-Control-Allow-Origin", origin);
+  return headers;
+}
+
+function claimPreflight(request) {
+  const origin = request.headers.get("Origin") || "";
+  const headers = claimCors(origin);
+  return new Response(null, { status: headers.has("Access-Control-Allow-Origin") ? 204 : 403, headers });
+}
+
+async function claimBooth(request, env) {
+  const origin = request.headers.get("Origin") || "";
+  const headers = claimCors(origin);
+  headers.set("Content-Type", "application/json; charset=utf-8");
+  if (!headers.has("Access-Control-Allow-Origin")) {
+    return new Response(
+      JSON.stringify({ error: "Booth setup must start from a private Piccie setup page." }),
+      { status: 403, headers },
+    );
+  }
+  try {
+    if (!env.PHOTOS || typeof env.PICCIE_SETUP_KEY !== "string" || env.PICCIE_SETUP_KEY.length < 24) {
+      throw new Error("This gallery Worker does not have a valid setup key.");
+    }
+    const body = await request.json();
+    const setupKey = typeof body.setup_key === "string" ? body.setup_key : "";
+    const claimId = typeof body.claim_id === "string" ? body.claim_id : "";
+    if (!BOOTH_TOKEN.test(claimId) || setupKey.length < 24 || setupKey.length > 256) {
+      throw new Error("The Worker URL or setup key is invalid.");
+    }
+    if (!(await secureEqual(setupKey, env.PICCIE_SETUP_KEY))) {
+      return new Response(
+        JSON.stringify({ error: "The Worker URL or setup key is invalid." }),
+        { status: 401, headers },
+      );
+    }
+    const markerKey = "setup/claimed.json";
+    const token = await deriveBoothToken(setupKey, claimId);
+    const digest = await sha256Hex(token);
+    const existing = await env.PHOTOS.get(markerKey);
+    if (existing) {
+      const marker = await existing.json().catch(() => ({}));
+      if (marker.claim_id !== claimId) {
+        return new Response(
+          JSON.stringify({
+            error: "This setup key has already been used. Rotate the Worker's setup key to connect another booth.",
+          }),
+          { status: 409, headers },
+        );
+      }
+      await ensureBoothCredential(env, digest);
+      return new Response(
+        JSON.stringify({ r2: workerConfiguration(new URL(request.url).origin, token) }),
+        { headers },
+      );
+    }
+
+    await ensureBoothCredential(env, digest);
+    const claimed = await env.PHOTOS.put(
+      markerKey,
+      JSON.stringify({
+        version: 1,
+        claim_id: claimId,
+        created_at: new Date().toISOString(),
+      }),
+      {
+        httpMetadata: { contentType: "application/json" },
+        onlyIf: new Headers({ "If-None-Match": "*" }),
+      },
+    );
+    if (!claimed) {
+      const winner = await env.PHOTOS.get(markerKey);
+      const marker = winner ? await winner.json().catch(() => ({})) : {};
+      if (marker.claim_id !== claimId) {
+        await env.PHOTOS.delete(`booths/${digest}.json`);
+        return new Response(
+          JSON.stringify({ error: "This setup key was claimed by another booth." }),
+          { status: 409, headers },
+        );
+      }
+    }
+    return new Response(
+      JSON.stringify({ r2: workerConfiguration(new URL(request.url).origin, token) }),
+      { headers },
+    );
+  } catch (error) {
+    return new Response(JSON.stringify({ error: safeError(error) }), { status: 400, headers });
+  }
+}
+
+async function ensureBoothCredential(env, digest) {
+  if (await env.PHOTOS.head(`booths/${digest}.json`)) return;
+  await env.PHOTOS.put(
+    `booths/${digest}.json`,
+    JSON.stringify({
+      version: 1,
+      created_at: new Date().toISOString(),
+    }),
+    { httpMetadata: { contentType: "application/json" } },
+  );
+}
+
+function workerConfiguration(requestOrigin, token) {
+  return {
+    account_id: "",
+    access_key: "",
+    secret_key: "",
+    bucket: "",
+    public_base_url: requestOrigin.replace(/\/+$/, ""),
+    jurisdiction: "default",
+    worker_token: token,
+  };
+}
+
+async function deriveBoothToken(setupKey, claimId) {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(setupKey),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  return encodeBase64Url(new Uint8Array(await crypto.subtle.sign(
+    "HMAC",
+    key,
+    new TextEncoder().encode(`piccie-booth-v1:${claimId}`),
+  )));
+}
+
+async function secureEqual(left, right) {
+  const [leftDigest, rightDigest] = await Promise.all([
+    crypto.subtle.digest("SHA-256", new TextEncoder().encode(left)),
+    crypto.subtle.digest("SHA-256", new TextEncoder().encode(right)),
+  ]);
+  const leftBytes = new Uint8Array(leftDigest);
+  const rightBytes = new Uint8Array(rightDigest);
+  let difference = 0;
+  for (let index = 0; index < leftBytes.length; index += 1) {
+    difference |= leftBytes[index] ^ rightBytes[index];
+  }
+  return difference === 0;
+}
+
+async function boothRequest(request, env, url) {
+  if (!env.PHOTOS || !(await authorizedBooth(request, env))) {
+    return jsonResponse({ error: "This booth upload credential is not valid." }, 401);
+  }
+  try {
+    if (url.pathname === "/booth/health" && request.method === "GET") {
+      return jsonResponse({ ok: true });
+    }
+    if (url.pathname === "/booth/object") {
+      const key = validObjectKey(url.searchParams.get("key"));
+      if (!key) return jsonResponse({ error: "The object key is not allowed." }, 400);
+      if (request.method === "PUT") {
+        if (!request.body) return jsonResponse({ error: "The upload body is empty." }, 400);
+        await env.PHOTOS.put(key, request.body, {
+          httpMetadata: {
+            contentType: request.headers.get("Content-Type") || "application/octet-stream",
+          },
+        });
+        return jsonResponse({ ok: true });
+      }
+      if (request.method === "DELETE") {
+        await env.PHOTOS.delete(key);
+        return jsonResponse({ ok: true });
+      }
+    }
+    if (url.pathname === "/booth/prefix" && request.method === "DELETE") {
+      const prefix = validPrefix(url.searchParams.get("prefix"));
+      if (!prefix) return jsonResponse({ error: "The deletion prefix is not allowed." }, 400);
+      let deleted = 0;
+      while (true) {
+        const listed = await env.PHOTOS.list({ prefix, limit: 1000 });
+        const keys = listed.objects.map((object) => object.key);
+        if (!keys.length) break;
+        await env.PHOTOS.delete(keys);
+        deleted += keys.length;
+      }
+      return jsonResponse({ ok: true, deleted });
+    }
+    if (url.pathname === "/booth/multipart/start" && request.method === "POST") {
+      const key = validObjectKey(url.searchParams.get("key"));
+      if (!key) return jsonResponse({ error: "The object key is not allowed." }, 400);
+      const upload = await env.PHOTOS.createMultipartUpload(key, {
+        httpMetadata: {
+          contentType: request.headers.get("Content-Type") || "application/octet-stream",
+        },
+      });
+      return jsonResponse({ upload_id: upload.uploadId });
+    }
+    if (url.pathname === "/booth/multipart/part" && request.method === "PUT") {
+      const key = validObjectKey(url.searchParams.get("key"));
+      const uploadId = url.searchParams.get("upload_id") || "";
+      const part = Number(url.searchParams.get("part"));
+      if (!key || !uploadId || !Number.isInteger(part) || part < 1 || part > 10000 || !request.body) {
+        return jsonResponse({ error: "The multipart upload request is invalid." }, 400);
+      }
+      const upload = env.PHOTOS.resumeMultipartUpload(key, uploadId);
+      const uploaded = await upload.uploadPart(part, request.body);
+      return jsonResponse({ part_number: uploaded.partNumber, etag: uploaded.etag });
+    }
+    if (url.pathname === "/booth/multipart/complete" && request.method === "POST") {
+      const body = await request.json();
+      const key = validObjectKey(body.key);
+      const uploadId = typeof body.upload_id === "string" ? body.upload_id : "";
+      const parts = Array.isArray(body.parts) ? body.parts : [];
+      if (
+        !key || !uploadId || !parts.length || parts.length > 10000
+        || parts.some((part) => (
+          !Number.isInteger(part.partNumber) || part.partNumber < 1
+          || typeof part.etag !== "string" || !part.etag
+        ))
+      ) {
+        return jsonResponse({ error: "The multipart completion is invalid." }, 400);
+      }
+      await env.PHOTOS.resumeMultipartUpload(key, uploadId).complete(parts);
+      return jsonResponse({ ok: true });
+    }
+    if (url.pathname === "/booth/multipart" && request.method === "DELETE") {
+      const key = validObjectKey(url.searchParams.get("key"));
+      const uploadId = url.searchParams.get("upload_id") || "";
+      if (!key || !uploadId) {
+        return jsonResponse({ error: "The multipart upload request is invalid." }, 400);
+      }
+      await env.PHOTOS.resumeMultipartUpload(key, uploadId).abort();
+      return jsonResponse({ ok: true });
+    }
+    return jsonResponse({ error: "Not found" }, 404);
+  } catch (error) {
+    return jsonResponse({ error: safeError(error) }, 500);
+  }
+}
+
+async function authorizedBooth(request, env) {
+  const match = /^Bearer ([A-Za-z0-9_-]+)$/.exec(request.headers.get("Authorization") || "");
+  if (!match || !BOOTH_TOKEN.test(match[1])) return false;
+  const digest = await sha256Hex(match[1]);
+  return Boolean(await env.PHOTOS.head(`booths/${digest}.json`));
+}
+
+function validObjectKey(value) {
+  return typeof value === "string" && OBJECT_KEY.test(value) ? value : null;
+}
+
+function validPrefix(value) {
+  return typeof value === "string" && PREFIX_KEY.test(value) ? value : null;
+}
+
+function jsonResponse(payload, status = 200) {
+  return new Response(JSON.stringify(payload), {
+    status,
+    headers: securityHeaders("application/json; charset=utf-8"),
+  });
+}
+
+function safeError(error) {
+  const text = error instanceof Error ? error.message : String(error || "");
+  return text.slice(0, 300) || "Gallery request failed.";
+}
+
+function encodeBase64Url(bytes) {
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
+}
+
+async function sha256Hex(value) {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+  return [...new Uint8Array(digest)]
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
 
 async function serveStrip(env, token, request) {
   const share = await resolveShare(env, token, "strip");

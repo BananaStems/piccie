@@ -19,6 +19,12 @@ templates from a phone connected to the same Wi-Fi.
 Piccie is self-hosted. The booth stores its own data and uploads finished strips
 to your Cloudflare R2 account.
 
+[![Deploy Piccie Gallery to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/BananaStems/piccie/tree/main/cloud)
+
+The deployment creates the private photo bucket and gallery Worker in your
+Cloudflare account. On first boot, pair it to Piccie once with the setup key—no
+Cloudflare OAuth client or account-wide API token is required.
+
 ## Get started
 
 Choose the guide you need:

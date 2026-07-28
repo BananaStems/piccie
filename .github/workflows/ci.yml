@@ -21,7 +21,8 @@ jobs:
         env:
           PICCIE_CAMERA: mock
       - run: python -m compileall -q engine
-      - run: node --check web/js/studio.js && node --check web/js/screens/templates.js && node --check web/js/screens/editor.js
+      - run: node --check web/js/setup.js && node --check web/js/studio.js && node --check web/js/screens/templates.js && node --check web/js/screens/editor.js
+      - run: node --test web/test/*.test.mjs
       - run: node --test cloud/test/worker.test.js
       - run: bash -n image/*.sh scripts/*.sh
       - run: bash image/test-grow-data.sh

@@ -1,3 +1,5 @@
+import json
+import urllib.parse
 from unittest.mock import MagicMock
 
 from engine.config import R2Config
@@ -137,3 +139,106 @@ def test_guest_download_mismatch_fails_closed(tmp_path, monkeypatch):
         assert "guest link" in str(exc)
     else:
         raise AssertionError("mismatched guest bytes should fail the upload")
+
+
+def test_worker_upload_uses_bearer_credential_and_expected_keys(tmp_path, monkeypatch):
+    strip = tmp_path / "strip.jpg"
+    strip.write_bytes(b"jpeg")
+    config = R2Config(
+        public_base_url="https://gallery.example",
+        worker_token="booth-token",
+    )
+    uploader = R2Uploader(config)
+    requests = []
+
+    def urlopen(request, timeout):
+        requests.append(request)
+        return Response(b'{"ok":true}')
+
+    monkeypatch.setattr("engine.r2.urllib.request.urlopen", urlopen)
+    event = "11111111-1111-4111-8111-111111111111"
+    session = "22222222-2222-4222-8222-222222222222"
+    token = f"{event}.{session}.secret"
+    uploader.upload_session(
+        tmp_path,
+        event,
+        session,
+        "Wedding",
+        "2026-06-14",
+        share_token=token,
+    )
+
+    assert uploader.client is None
+    assert len(requests) == 3
+    assert all(request.get_header("Authorization") == "Bearer booth-token" for request in requests)
+    keys = {
+        urllib.parse.parse_qs(urllib.parse.urlsplit(request.full_url).query)["key"][0]
+        for request in requests
+    }
+    assert keys == {
+        r2_event_strip_key(event, session),
+        r2_share_key(event, token),
+        f"events/{event}/manifest.json",
+    }
+
+
+def test_worker_large_upload_uses_multipart_and_completes(tmp_path, monkeypatch):
+    archive = tmp_path / "download-all.zip"
+    archive.write_bytes(b"abcdefghij")
+    uploader = R2Uploader(
+        R2Config(
+            public_base_url="https://gallery.example",
+            worker_token="booth-token",
+        )
+    )
+    monkeypatch.setattr("engine.r2.MULTIPART_THRESHOLD", 4)
+    monkeypatch.setattr("engine.r2.MULTIPART_PART_SIZE", 4)
+    calls = []
+
+    def urlopen(request, timeout):
+        calls.append(request)
+        path = urllib.parse.urlsplit(request.full_url).path
+        if path.endswith("/start"):
+            return Response(b'{"upload_id":"upload-1"}')
+        if path.endswith("/part"):
+            part = urllib.parse.parse_qs(
+                urllib.parse.urlsplit(request.full_url).query
+            )["part"][0]
+            return Response(json.dumps({"etag": f"etag-{part}"}).encode())
+        return Response(b'{"ok":true}')
+
+    monkeypatch.setattr("engine.r2.urllib.request.urlopen", urlopen)
+    uploader._upload_file(
+        archive,
+        "events/11111111-1111-4111-8111-111111111111/download-all.zip",
+        "application/zip",
+    )
+
+    paths = [urllib.parse.urlsplit(request.full_url).path for request in calls]
+    assert paths.count("/booth/multipart/part") == 3
+    assert paths[-1] == "/booth/multipart/complete"
+    completion = json.loads(calls[-1].data)
+    assert completion["parts"] == [
+        {"partNumber": 1, "etag": "etag-1"},
+        {"partNumber": 2, "etag": "etag-2"},
+        {"partNumber": 3, "etag": "etag-3"},
+    ]
+
+
+def test_worker_deletion_sends_only_validated_target_to_worker(monkeypatch):
+    uploader = R2Uploader(
+        R2Config(
+            public_base_url="https://gallery.example",
+            worker_token="booth-token",
+        )
+    )
+    requests = []
+    monkeypatch.setattr(
+        "engine.r2.urllib.request.urlopen",
+        lambda request, timeout: requests.append(request) or Response(b'{"ok":true}'),
+    )
+    event = "11111111-1111-4111-8111-111111111111"
+    uploader.delete_target(f"event:{event}")
+    parsed = urllib.parse.urlsplit(requests[0].full_url)
+    assert parsed.path == "/booth/prefix"
+    assert urllib.parse.parse_qs(parsed.query)["prefix"] == [f"events/{event}/"]

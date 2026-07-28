@@ -158,8 +158,13 @@ remove power or the card during that restart.
 3. Scan the one-time QR code with a phone or computer connected to the same
    Wi-Fi. The code uses the booth's current IP address, expires after 15
    minutes and contains no Cloudflare credentials.
-4. On that device, enter the bucket credentials and Worker URL created with
-   the [self-hosted gallery guide](../cloud/README.md).
+4. Select **Deploy to Cloudflare** on the phone setup page. Cloudflare creates
+   the private photo bucket and gallery Worker in your account. Copy the Worker
+   URL and the one-time setup key back into the setup page, then select
+   **Connect gallery**. The key can pair one booth only; Piccie receives a
+   booth-only upload credential, not a Cloudflare API token or R2 account key.
+   See the [self-hosted gallery guide](../cloud/README.md) for command-line
+   deployment or replacement-booth reset instructions.
 5. Choose an operator PIN.
 6. Add your computer's SSH public key if you want remote updates and access to
    the soak test, then finish setup. You can select **Enter on booth** instead

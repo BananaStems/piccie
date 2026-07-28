@@ -5,4 +5,4 @@ workers_dev = true
 
 [[r2_buckets]]
 binding = "PHOTOS"
-bucket_name = "piccie-photos"
+bucket_name = "photobooth"

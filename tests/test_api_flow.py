@@ -61,7 +61,7 @@ def client(tmp_path, monkeypatch):
 def test_operator_auth_event_and_capture_flow(client):
     test_client, app = client
     status = test_client.get("/api/status").json()
-    assert status["version"] == "1.0.4"
+    assert status["version"] == "1.0.5"
     assert status["build"]
     app.state.config_store.set_admin_pin("2468")
     event_body = {
@@ -356,7 +356,6 @@ def test_phone_onboarding_pair_is_private_single_use_and_completes(
     monkeypatch.setattr("engine.provisioning._public_r2_probe", lambda _config: None)
     monkeypatch.setattr("engine.api.routes.current_ssid", lambda: "Venue")
     monkeypatch.setattr("engine.api.routes._lan_ip", lambda: "192.168.1.145")
-
     pairing = test_client.post("/api/onboarding/pair")
     assert pairing.status_code == 200
     assert pairing.json()["url"].startswith(
@@ -372,6 +371,7 @@ def test_phone_onboarding_pair_is_private_single_use_and_completes(
     status = test_client.get("/api/setup/status", headers=headers)
     assert status.status_code == 200
     assert status.json()["wifi_ssid"] == "Venue"
+    assert "cloudflare_oauth_url" not in status.json()
 
     completed = test_client.post(
         "/api/setup/complete",
@@ -394,6 +394,37 @@ def test_phone_onboarding_pair_is_private_single_use_and_completes(
     assert app.state.onboarding_pairing is None
     assert (tmp_path / ".provisioned").exists()
     assert test_client.get("/api/setup/status", headers=headers).status_code == 409
+
+
+def test_phone_onboarding_accepts_worker_credential_without_r2_keys(
+    client, monkeypatch, tmp_path
+):
+    test_client, app = client
+    monkeypatch.setattr("engine.provisioning._public_r2_probe", lambda _config: None)
+    monkeypatch.setattr("engine.api.routes.current_ssid", lambda: "Venue")
+    monkeypatch.setattr("engine.api.routes._lan_ip", lambda: "192.168.1.145")
+
+    pairing = test_client.post("/api/onboarding/pair").json()
+    token = pairing["url"].split("#token=", 1)[1]
+    completed = test_client.post(
+        "/api/setup/complete",
+        headers={"X-Setup-Token": token},
+        json={
+            "admin_pin": "2468",
+            "r2": {
+                "public_base_url": "https://gallery.example",
+                "worker_token": "A" * 43,
+            },
+        },
+    )
+
+    assert completed.status_code == 200
+    r2 = app.state.config_store.ensure().r2
+    assert r2 is not None
+    assert r2.uses_worker_upload
+    assert r2.worker_token == "A" * 43
+    assert r2.account_id == ""
+    assert json.loads((tmp_path / "local.json").read_text())["r2"]["access_key"] == ""
 
 
 def test_phone_onboarding_pair_replaces_revokes_and_expires(client, monkeypatch):

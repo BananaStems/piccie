@@ -97,6 +97,60 @@ h2 {
   font-size: 0.875rem;
 }
 
+.claim-panel {
+  display: grid;
+  gap: 10px;
+  margin-top: 26px;
+  padding: 18px;
+  border: 1px solid rgba(45, 38, 32, 0.12);
+  border-radius: 14px;
+  background: #fff;
+}
+
+.claim-panel[hidden] {
+  display: none;
+}
+
+.claim-panel p {
+  margin: 0;
+  color: #7a7268;
+  font-size: 0.875rem;
+  line-height: 1.4;
+}
+
+.claim-panel.connected {
+  border-color: rgba(50, 130, 78, 0.35);
+  background: #f3faf4;
+}
+
+.claim-panel.connected p {
+  color: #28703f;
+}
+
+.cloudflare-button,
+.deploy-button {
+  width: 100%;
+  min-height: 54px;
+  padding: 12px 18px;
+  border: 0;
+  border-radius: 11px;
+  background: #f48120;
+  color: #fff;
+  font-weight: 700;
+  text-align: center;
+  text-decoration: none;
+}
+
+.cloudflare-button:disabled {
+  opacity: 0.55;
+}
+
+.deploy-button {
+  display: grid;
+  place-items: center;
+  background: #2d2926;
+}
+
 form {
   display: grid;
   gap: 17px;
@@ -172,6 +226,33 @@ hr {
   border-top: 1px solid rgba(45, 38, 32, 0.12);
 }
 
+.manual-settings {
+  grid-column: 1 / -1;
+  border: 1px solid rgba(45, 38, 32, 0.12);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.5);
+}
+
+.manual-settings summary {
+  padding: 16px;
+  cursor: pointer;
+  color: #625b54;
+  font-weight: 600;
+}
+
+.manual-settings > p {
+  margin: 0;
+  padding: 0 16px 14px;
+  color: #7a7268;
+  font-size: 0.875rem;
+}
+
+.manual-fields {
+  display: grid;
+  gap: 17px;
+  padding: 0 16px 16px;
+}
+
 .primary {
   width: 100%;
   min-height: 54px;
@@ -231,10 +312,11 @@ hr {
     grid-template-columns: 1fr 1fr;
   }
 
-  form > label:nth-of-type(3),
-  form > label:nth-of-type(4),
-  form > label:nth-of-type(5),
-  form > label:nth-of-type(9),
+  .manual-fields {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .field-wide,
   form > hr,
   form > h2,
   .form-message,

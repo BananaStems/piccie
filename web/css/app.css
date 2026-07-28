@@ -226,12 +226,6 @@ html.sim-panel #booth-frame {
   padding-bottom: calc(var(--osk-height) + 16px);
 }
 
-/* The Wi-Fi connect panel is pinned to the bottom of a non-scrolling screen, so
-   lift it above the keyboard when typing the password (the network list shrinks). */
-#booth-frame.osk-open .wifi-connect {
-  margin-bottom: calc(var(--osk-height) + 16px);
-}
-
 .osk-panel {
   display: none;
   position: absolute;
@@ -1344,10 +1338,13 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 
 #booth-frame.osk-open .onboarding-panel {
   padding-bottom: calc(var(--osk-height) + var(--space-4));
+  scroll-padding-bottom: calc(var(--osk-height) + var(--space-4));
 }
 
 #booth-frame.osk-open .onboarding-wifi-form {
-  bottom: calc(var(--osk-height) + var(--space-2));
+  position: relative;
+  inset: auto;
+  margin-top: var(--space-4);
 }
 
 .wifi-list {
@@ -1453,6 +1450,31 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 
 .wifi-screen {
   overflow: hidden;
+}
+
+#booth-frame.osk-open .wifi-screen {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scroll-padding-bottom: calc(var(--osk-height) + var(--space-4));
+}
+
+#booth-frame.osk-open .wifi-screen .wifi-list {
+  flex: 0 0 160px;
+  min-height: 160px;
+}
+
+.wifi-keyboard-spacer {
+  display: none;
+}
+
+#booth-frame.osk-open .wifi-keyboard-spacer {
+  display: block;
+  flex: 0 0 calc(var(--osk-height) + var(--space-4));
+}
+
+.wifi-keyboard-anchor {
+  scroll-margin-block: var(--space-4);
+  scroll-snap-align: end;
 }
 
 .wifi-screen .wifi-list {

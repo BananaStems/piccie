@@ -22,3 +22,16 @@ export function initCornerTap(onTrigger) {
 export function setCornerHandler(fn) {
   handler = fn;
 }
+
+export async function runProtectedCornerExit({
+  isParty,
+  requestUnlock,
+  deactivateParty,
+  exitParty,
+}) {
+  if (!isParty) return false;
+  if (!(await requestUnlock())) return false;
+  await deactivateParty();
+  await exitParty();
+  return true;
+}

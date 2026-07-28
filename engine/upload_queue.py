@@ -195,6 +195,7 @@ class UploadQueue:
             config.r2.bucket,
             config.r2.public_base_url,
             config.r2.jurisdiction,
+            config.r2.worker_token,
         )
         if self._uploader is None or self._uploader_key != key:
             self._uploader = R2Uploader(config.r2)

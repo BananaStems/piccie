@@ -5,7 +5,11 @@ import {
   startRingCountdown,
   stopRingCountdown,
 } from "./capture-ring.js";
-import { initCornerTap, setCornerHandler } from "./corner-tap.js";
+import {
+  initCornerTap,
+  runProtectedCornerExit,
+  setCornerHandler,
+} from "./corner-tap.js";
 import { closeOnScreenKeyboard, initOnScreenKeyboard } from "./osk.js";
 import { renderAdminScreen, renderGalleryScreen } from "./screens/admin.js";
 import {
@@ -355,12 +359,23 @@ async function requestOperatorUnlock() {
   }
 }
 
+let cornerExitInProgress = false;
+
 async function handleCornerTap() {
-  if (state.view.startsWith("party")) {
-    if (state.status.admin_pin_set && !(await requestOperatorUnlock())) return;
-    await api.setActiveEvent(null);
-    state.status.active_event_id = null;
-    await exitParty();
+  if (cornerExitInProgress) return;
+  cornerExitInProgress = true;
+  try {
+    await runProtectedCornerExit({
+      isParty: state.view.startsWith("party"),
+      requestUnlock: requestOperatorUnlock,
+      deactivateParty: async () => {
+        await api.setActiveEvent(null);
+        state.status.active_event_id = null;
+      },
+      exitParty,
+    });
+  } finally {
+    cornerExitInProgress = false;
   }
 }
 

@@ -5,6 +5,7 @@ import logging
 import secrets
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -21,11 +22,16 @@ from engine.paths import (
 )
 
 logger = logging.getLogger(__name__)
+MULTIPART_THRESHOLD = 8 * 1024 * 1024
+MULTIPART_PART_SIZE = 8 * 1024 * 1024
 
 
 class R2Uploader:
     def __init__(self, config: R2Config) -> None:
         self.config = config
+        self.client = None
+        if config.uses_worker_upload:
+            return
         jurisdiction = "" if config.jurisdiction == "default" else f".{config.jurisdiction}"
         endpoint = f"https://{config.account_id}{jurisdiction}.r2.cloudflarestorage.com"
         # Bounded timeouts + retry cap: venue WiFi drops mid-party must not wedge
@@ -98,6 +104,9 @@ class R2Uploader:
         return self.public_url(f"g/{token}"), token
 
     def disable_share(self, event_id: str, token: str) -> None:
+        if self.config.uses_worker_upload:
+            self._worker_delete_key(r2_share_key(event_id, token))
+            return
         self.client.delete_object(
             Bucket=self.config.bucket,
             Key=r2_share_key(event_id, token),
@@ -110,7 +119,13 @@ class R2Uploader:
         if target.startswith("event-content:"):
             event_id = target.split(":", 1)[1]
             self._delete_prefix(f"{r2_event_prefix(event_id)}sessions/")
-            self.client.delete_object(Bucket=self.config.bucket, Key=r2_event_archive_key(event_id))
+            if self.config.uses_worker_upload:
+                self._worker_delete_key(r2_event_archive_key(event_id))
+            else:
+                self.client.delete_object(
+                    Bucket=self.config.bucket,
+                    Key=r2_event_archive_key(event_id),
+                )
             return
         if target.startswith("event-session:"):
             _, event_id, session_id = target.split(":", 2)
@@ -118,14 +133,19 @@ class R2Uploader:
             return
         if target.startswith("event-share:"):
             _, event_id, token = target.split(":", 2)
-            self.client.delete_object(
-                Bucket=self.config.bucket,
-                Key=r2_share_key(event_id, token),
-            )
+            self.disable_share(event_id, token)
             return
         raise ValueError(f"Unknown R2 deletion target: {target}")
 
     def _delete_prefix(self, prefix: str) -> None:
+        if self.config.uses_worker_upload:
+            self._worker_request(
+                "DELETE",
+                "/booth/prefix",
+                query={"prefix": prefix},
+            )
+            logger.info("Deleted Worker R2 prefix %s", prefix)
+            return
         continuation: str | None = None
         while True:
             args = {"Bucket": self.config.bucket, "Prefix": prefix}
@@ -149,6 +169,10 @@ class R2Uploader:
         key: str,
         content_type: str = "image/jpeg",
     ) -> None:
+        if self.config.uses_worker_upload:
+            self._worker_upload_file(path, key, content_type)
+            logger.info("Uploaded %s through gallery Worker as %s", path.name, key)
+            return
         self.client.upload_file(
             str(path),
             self.config.bucket,
@@ -158,10 +182,21 @@ class R2Uploader:
         logger.info("Uploaded %s to s3://%s/%s", path.name, self.config.bucket, key)
 
     def _upload_json(self, payload: dict, key: str) -> None:
+        encoded = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+        if self.config.uses_worker_upload:
+            self._worker_request(
+                "PUT",
+                "/booth/object",
+                query={"key": key},
+                data=encoded,
+                headers={"Content-Type": "application/json"},
+            )
+            logger.info("Uploaded %s through gallery Worker", key.split("/")[-1])
+            return
         self.client.put_object(
             Bucket=self.config.bucket,
             Key=key,
-            Body=json.dumps(payload, separators=(",", ":")).encode("utf-8"),
+            Body=encoded,
             ContentType="application/json",
         )
         logger.info("Uploaded %s to s3://%s/%s", key.split("/")[-1], self.config.bucket, key)
@@ -175,6 +210,115 @@ class R2Uploader:
     def public_url(self, key: str) -> str:
         base = self.config.public_base_url.rstrip("/")
         return f"{base}/{key}"
+
+    def _worker_upload_file(self, path: Path, key: str, content_type: str) -> None:
+        if path.stat().st_size < MULTIPART_THRESHOLD:
+            self._worker_request(
+                "PUT",
+                "/booth/object",
+                query={"key": key},
+                data=path.read_bytes(),
+                headers={"Content-Type": content_type},
+            )
+            return
+
+        started = self._worker_request(
+            "POST",
+            "/booth/multipart/start",
+            query={"key": key},
+            data=b"",
+            headers={"Content-Type": content_type},
+        )
+        upload_id = started.get("upload_id")
+        if not isinstance(upload_id, str) or not upload_id:
+            raise RuntimeError("The gallery Worker did not start the large upload.")
+        parts: list[dict] = []
+        try:
+            with path.open("rb") as source:
+                part_number = 1
+                while chunk := source.read(MULTIPART_PART_SIZE):
+                    uploaded = self._worker_request(
+                        "PUT",
+                        "/booth/multipart/part",
+                        query={
+                            "key": key,
+                            "upload_id": upload_id,
+                            "part": str(part_number),
+                        },
+                        data=chunk,
+                        headers={"Content-Type": "application/octet-stream"},
+                    )
+                    etag = uploaded.get("etag")
+                    if not isinstance(etag, str) or not etag:
+                        raise RuntimeError(
+                            f"The gallery Worker did not confirm upload part {part_number}."
+                        )
+                    parts.append({"partNumber": part_number, "etag": etag})
+                    part_number += 1
+            self._worker_request(
+                "POST",
+                "/booth/multipart/complete",
+                data=json.dumps(
+                    {"key": key, "upload_id": upload_id, "parts": parts},
+                    separators=(",", ":"),
+                ).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+            )
+        except Exception:
+            try:
+                self._worker_request(
+                    "DELETE",
+                    "/booth/multipart",
+                    query={"key": key, "upload_id": upload_id},
+                )
+            except Exception:  # noqa: BLE001 - preserve the upload error
+                logger.warning("Could not abort failed Worker multipart upload %s", key)
+            raise
+
+    def _worker_delete_key(self, key: str) -> None:
+        self._worker_request("DELETE", "/booth/object", query={"key": key})
+
+    def _worker_request(
+        self,
+        method: str,
+        path: str,
+        *,
+        query: dict[str, str] | None = None,
+        data: bytes | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> dict:
+        url = f"{self.config.public_base_url.rstrip('/')}{path}"
+        if query:
+            url = f"{url}?{urllib.parse.urlencode(query)}"
+        request = urllib.request.Request(
+            url,
+            method=method,
+            data=data,
+            headers={
+                "Authorization": f"Bearer {self.config.worker_token}",
+                "Cache-Control": "no-cache",
+                **(headers or {}),
+            },
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=45) as response:
+                raw = response.read()
+        except urllib.error.HTTPError as exc:
+            try:
+                detail = json.loads(exc.read()).get("error")
+            except Exception:  # noqa: BLE001 - response may not be JSON
+                detail = None
+            raise RuntimeError(
+                detail or f"The gallery Worker rejected the request ({exc.code})."
+            ) from exc
+        except OSError as exc:
+            raise RuntimeError("The gallery Worker could not be reached.") from exc
+        if not raw:
+            return {}
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError("The gallery Worker returned an invalid response.") from exc
 
     def verify_guest_download(
         self,

@@ -6,7 +6,14 @@
     "test": "node --test",
     "deploy": "wrangler deploy"
   },
+  "cloudflare": {
+    "bindings": {
+      "PICCIE_SETUP_KEY": {
+        "description": "Create a unique one-time setup key with at least 24 characters. You will enter it once when pairing your Piccie booth."
+      }
+    }
+  },
   "devDependencies": {
-    "wrangler": "4.112.0"
+    "wrangler": "4.114.0"
   }
 }
