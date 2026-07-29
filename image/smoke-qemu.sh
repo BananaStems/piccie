@@ -9,6 +9,7 @@ SKIP_BOOT=0
 LOG=""
 REBOOT_RESTARTED=0
 HTTP_PORT="${PICCIE_QEMU_HTTP_PORT:-18080}"
+LAUNCH_PID=""
 
 cleanup() {
   if [[ -n "${LOG}" && -f "${LOG}" ]]; then
@@ -83,6 +84,7 @@ if [[ "${SKIP_BOOT}" -eq 0 ]]; then
     PICCIE_QEMU_HTTP_PORT="${HTTP_PORT}" \
     PICCIE_QEMU_HEADLESS=1 PICCIE_QEMU_BACKGROUND=1 \
     "${REPO_ROOT}/image/run-qemu.sh" >"${LOG}" 2>&1 &
+  LAUNCH_PID=$!
 else
   LOG="$(mktemp)"
   echo "Checking already-running QEMU (timeout ${TIMEOUT}s)..."
@@ -113,7 +115,15 @@ while (( SECONDS < deadline )); do
         PICCIE_QEMU_HTTP_PORT="${HTTP_PORT}" \
         PICCIE_QEMU_HEADLESS=1 PICCIE_QEMU_BACKGROUND=1 \
         "${REPO_ROOT}/image/run-qemu.sh" >>"${LOG}" 2>&1 &
+      LAUNCH_PID=$!
       REBOOT_RESTARTED=1
+    fi
+    if [[ -n "${LAUNCH_PID}" ]] \
+        && ! kill -0 "${LAUNCH_PID}" 2>/dev/null \
+        && ! pgrep -f "qemu-system-aarch64.*piccie-qemu" >/dev/null; then
+      echo "QEMU failed to start or exited unexpectedly. Last log lines:" >&2
+      tail -20 "${LOG}" >&2
+      exit 1
     fi
     if boot_ok; then
       echo ""

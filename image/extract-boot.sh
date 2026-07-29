@@ -35,7 +35,15 @@ trap cleanup EXIT
 if [[ "$(uname -s)" == "Darwin" ]]; then
   # Auto-mount works without root; -nomount + mount often fails in sandboxes.
   ATTACH_OUT="$(hdiutil attach -readonly -imagekey diskimage-class=CRawDiskImage "${IMG}")"
-  MOUNT_DIR="$(echo "${ATTACH_OUT}" | awk '/Windows_FAT|FAT32|bootfs/ {print $NF; exit}')"
+  # hdiutil separates columns with tabs. Preserve spaces in mount points such
+  # as /Volumes/bootfs 1 when another image with the same label is mounted.
+  MOUNT_DIR="$(echo "${ATTACH_OUT}" | awk -F '\t' '
+    /Windows_FAT|FAT32|bootfs/ {
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", $3)
+      print $3
+      exit
+    }
+  ')"
   DISK_DEV="$(echo "${ATTACH_OUT}" | awk 'NR==1 {print $1}')"
   if [[ -z "${MOUNT_DIR}" || ! -d "${MOUNT_DIR}" ]]; then
     echo "Failed to mount boot partition from ${IMG}" >&2
