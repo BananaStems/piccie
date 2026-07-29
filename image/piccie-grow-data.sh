@@ -11,6 +11,7 @@ DATA_MOUNT="${PICCIE_GROW_DATA_MOUNT:-/data}"
 SYS_BLOCK="${PICCIE_GROW_DATA_SYS_BLOCK:-/sys/class/block}"
 DEGRADED_MARKER="${PICCIE_GROW_DATA_DEGRADED_MARKER:-/run/piccie.degraded}"
 FAILURE_MARKER="${PICCIE_GROW_DATA_FAILURE_MARKER:-/run/piccie-data-grow.failed}"
+KERNEL_CMDLINE="${PICCIE_GROW_DATA_KERNEL_CMDLINE:-/proc/cmdline}"
 EXPECTED_PARTITION=3
 DEVICE_WAIT_SECONDS="${PICCIE_GROW_DATA_DEVICE_WAIT_SECONDS:-60}"
 
@@ -201,6 +202,10 @@ read_filesystem_geometry() {
 
 check_ext4() {
   local rc
+  if [[ -r "${KERNEL_CMDLINE}" ]] && grep -qw -- "piccie.qemu=1" "${KERNEL_CMDLINE}"; then
+    log "QEMU smoke mode: skipping e2fsck on the emulated SD controller"
+    return 0
+  fi
   set +e
   # Avoid issuing a full-device discard while the microSD is still on the
   # critical boot path. It provides no integrity benefit and some SD/QEMU

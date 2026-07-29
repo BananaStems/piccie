@@ -56,6 +56,7 @@ setup_fixture() {
   RESIZE_STUCK_FILE="${FIXTURE}/resize-stuck"
   LABEL_FILE="${FIXTURE}/label"
   DEVICE_UNAVAILABLE_FILE="${FIXTURE}/device-unavailable"
+  KERNEL_CMDLINE="${FIXTURE}/cmdline"
   DEVICE_WAIT_SECONDS=60
 
   printf '3\n' >"${SYS_BLOCK}/fakediskp3/partition"
@@ -65,6 +66,7 @@ setup_fixture() {
   printf '16\n' >"${FS_BLOCKS_FILE}"
   printf 'unmounted\n' >"${MOUNT_STATE_FILE}"
   printf 'data\n' >"${LABEL_FILE}"
+  : >"${KERNEL_CMDLINE}"
   : >"${ACTIONS_FILE}"
 }
 
@@ -228,6 +230,18 @@ test_full_device_is_idempotent() {
   printf '64\n' >"${FS_BLOCKS_FILE}"
   main >"${OUTPUT_FILE}" 2>&1
   assert_equals "$(tr '\n' ' ' <"${ACTIONS_FILE}")" "e2fsck "
+  assert_contains "${OUTPUT_FILE}" "already use the full device"
+}
+
+test_qemu_smoke_skips_emulated_fsck() {
+  setup_fixture
+  printf '512\n' >"${TABLE_SIZE_FILE}"
+  printf '512\n' >"${SYS_BLOCK}/fakediskp3/size"
+  printf '64\n' >"${FS_BLOCKS_FILE}"
+  printf 'console=ttyAMA0 piccie.qemu=1 root=/dev/fakediskp2\n' >"${KERNEL_CMDLINE}"
+  main >"${OUTPUT_FILE}" 2>&1
+  [[ ! -s "${ACTIONS_FILE}" ]] || fail "QEMU idempotency check unexpectedly ran filesystem tools"
+  assert_contains "${OUTPUT_FILE}" "QEMU smoke mode: skipping e2fsck"
   assert_contains "${OUTPUT_FILE}" "already use the full device"
 }
 
@@ -474,6 +488,7 @@ run_test() {
 run_test test_partition_growth_requests_one_reboot
 run_test test_second_boot_grows_and_verifies_ext4
 run_test test_full_device_is_idempotent
+run_test test_qemu_smoke_skips_emulated_fsck
 run_test test_one_ext4_block_short_is_grown
 run_test test_missing_data_device_times_out_without_changes
 run_test test_wrong_partition_number_fails_without_changes
