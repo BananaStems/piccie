@@ -185,6 +185,7 @@ tune2fs() {
 }
 
 e2fsck() {
+  [[ "$*" == "-pf -E nodiscard /dev/fakediskp3" ]] || return 99
   printf 'e2fsck\n' >>"${ACTIONS_FILE}"
   return 0
 }
@@ -368,7 +369,8 @@ test_systemd_ordering_keeps_growth_offline() {
   local fstab="${REPO_ROOT}/image/pigen/fstab"
 
   assert_contains "${grow_unit}" "Before=local-fs-pre.target data.mount"
-  assert_contains "${grow_unit}" "After=systemd-udev-trigger.service"
+  assert_contains "${grow_unit}" "Wants=systemd-udevd.service systemd-udev-trigger.service"
+  assert_contains "${grow_unit}" "After=systemd-udevd.service systemd-udev-trigger.service"
   assert_not_contains "${grow_unit}" "systemd-udev-settle.service"
   assert_contains "${grow_unit}" "WantedBy=sysinit.target"
   assert_contains "${fstab}" "x-systemd.before=NetworkManager.service  0  0"
@@ -379,8 +381,8 @@ test_systemd_ordering_keeps_growth_offline() {
   assert_contains "${engine_unit}" "Wants=systemd-timesyncd.service"
   assert_contains "${qemu_runner}" 'root=${ROOT_DEV} ro rootwait'
   assert_not_contains "${qemu_runner}" 'root=${ROOT_DEV} rw rootwait'
-  assert_contains "${qemu_runner}" 'qemu-img create -q -f qcow2 -F raw -b "${IMG}" "${QEMU_IMG}"'
-  assert_contains "${qemu_runner}" 'format=qcow2,if=sd'
+  assert_contains "${qemu_runner}" 'cp -c "${IMG}" "${QEMU_IMG}"'
+  assert_contains "${qemu_runner}" 'format=raw,if=sd'
   assert_contains "${qemu_runner}" 'systemd.log_target=kmsg'
   assert_contains "${qemu_runner}" 'systemd.journald.forward_to_console=1'
   assert_contains "${REPO_ROOT}/image/smoke-qemu.sh" 'reboot: Restarting system'

@@ -202,7 +202,10 @@ read_filesystem_geometry() {
 check_ext4() {
   local rc
   set +e
-  e2fsck -pf "${DATA_DEV}"
+  # Avoid issuing a full-device discard while the microSD is still on the
+  # critical boot path. It provides no integrity benefit and some SD/QEMU
+  # controllers handle the request poorly.
+  e2fsck -pf -E nodiscard "${DATA_DEV}"
   rc=$?
   set -e
   case "${rc}" in
