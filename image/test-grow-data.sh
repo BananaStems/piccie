@@ -223,7 +223,7 @@ test_full_device_is_idempotent() {
   printf '512\n' >"${SYS_BLOCK}/fakediskp3/size"
   printf '64\n' >"${FS_BLOCKS_FILE}"
   main >"${OUTPUT_FILE}" 2>&1
-  [[ ! -s "${ACTIONS_FILE}" ]] || fail "idempotent run performed a mutating action"
+  assert_equals "$(tr '\n' ' ' <"${ACTIONS_FILE}")" "e2fsck "
   assert_contains "${OUTPUT_FILE}" "already use the full device"
 }
 
@@ -351,9 +351,11 @@ test_systemd_ordering_keeps_growth_offline() {
   local seed_unit="${REPO_ROOT}/image/piccie-firstboot-datapart.service"
   local engine_unit="${REPO_ROOT}/image/piccie-engine.service"
   local qemu_runner="${REPO_ROOT}/image/run-qemu.sh"
+  local fstab="${REPO_ROOT}/image/pigen/fstab"
 
   assert_contains "${grow_unit}" "Before=local-fs-pre.target data.mount"
   assert_contains "${grow_unit}" "WantedBy=sysinit.target"
+  assert_contains "${fstab}" "x-systemd.before=NetworkManager.service  0  0"
   assert_contains "${fallback_unit}" "After=piccie-grow-data.service local-fs.target data.mount"
   assert_contains "${fallback_unit}" "/run/piccie-data-grow.failed"
   assert_contains "${seed_unit}" "Requires=data-fallback.service"

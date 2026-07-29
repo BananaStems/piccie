@@ -1,9 +1,9 @@
 proc            /proc           proc    defaults                                                                                                            0  0
 BOOTDEV  /boot/firmware  vfat    defaults,flush,noatime,nofail,x-systemd.device-timeout=60s                                                                  0  2
 ROOTDEV  /               ext4    ro,noatime,errors=remount-ro                                                                                                0  1
-# piccie-grow-data runs before data.mount; do not add x-systemd.growfs here,
-# because concurrent mount-time partition growth can deadlock first boot.
-DATADEV  /data           ext4    defaults,noatime,nodiratime,commit=5,errors=remount-ro,nofail,x-systemd.device-timeout=60s,x-systemd.before=NetworkManager.service  0  2
+# piccie-grow-data owns the offline /data check and runs before data.mount.
+# Keep the fsck pass at 0 so systemd-fsck cannot race Piccie's resize.
+DATADEV  /data           ext4    defaults,noatime,nodiratime,commit=5,errors=remount-ro,nofail,x-systemd.device-timeout=60s,x-systemd.before=NetworkManager.service  0  0
 tmpfs    /tmp            tmpfs   defaults,noatime,nosuid,nodev,size=128M                                                                                     0  0
 tmpfs    /var/tmp        tmpfs   defaults,noatime,nosuid,nodev,size=64M                                                                                      0  0
 tmpfs    /var/log        tmpfs   defaults,noatime,nosuid,nodev,size=64M,mode=0755                                                                            0  0

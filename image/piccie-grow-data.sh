@@ -204,6 +204,10 @@ check_ext4() {
 grow_filesystem_if_needed() {
   local geometry fs_blocks fs_block_size fs_bytes partition_bytes
 
+  # /data has fsck pass 0 in fstab. Piccie must be the only process checking
+  # this unmounted filesystem so systemd-fsck cannot race resize2fs.
+  check_ext4
+
   geometry="$(read_filesystem_geometry)" \
     || die "could not read ext4 geometry from ${DATA_DEV}"
   read -r fs_blocks fs_block_size <<<"${geometry}"
@@ -216,7 +220,6 @@ grow_filesystem_if_needed() {
   fi
 
   log "growing ext4 on ${DATA_DEV} from ${fs_bytes} to ${partition_bytes} bytes"
-  check_ext4
   resize2fs "${DATA_DEV}"
   check_ext4
 
