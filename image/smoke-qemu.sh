@@ -53,12 +53,13 @@ trap cleanup EXIT
 
 boot_ok() {
   grep -qE "piccie-grow-data: (filesystem expansion verified|partition and ext4 filesystem already use the full device)" "${LOG}" 2>/dev/null \
+    && grep -q "Reached target local-fs.target" "${LOG}" 2>/dev/null \
     && grep -q "Reached target multi-user.target" "${LOG}" 2>/dev/null \
     && curl -fsS --max-time 3 "http://127.0.0.1:${HTTP_PORT}/healthz" >/dev/null
 }
 
 boot_failed() {
-  grep -qE "Kernel panic|VFS: Cannot open root device|Unable to mount root|piccie-grow-data: ERROR:" "${LOG}" 2>/dev/null
+  grep -qE "Kernel panic|VFS: Cannot open root device|Unable to mount root|piccie-grow-data: ERROR:|Failed to mount |Dependency failed for local-fs.target|You are in emergency mode|Cannot open access to console" "${LOG}" 2>/dev/null
 }
 
 reboot_loop() {

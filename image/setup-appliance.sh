@@ -81,6 +81,11 @@ install -m 644 "${INSTALL_DIR}/image/files/nm-keyfile-path.conf" /etc/NetworkMan
 install -d /etc/polkit-1/rules.d
 install -m 644 "${INSTALL_DIR}/image/files/49-piccie-networkmanager.rules" /etc/polkit-1/rules.d/
 
+# lightdm does not create its cache directory when installed on the Lite base
+# image. The directory must exist before root becomes read-only or systemd
+# cannot mount the tmpfs declared in fstab and drops boot into emergency mode.
+install -d -m 0755 /var/cache/lightdm
+
 # Kiosk launches from openbox autostart, which runs INSIDE pi's X session and so
 # inherits DISPLAY/XAUTHORITY/XDG_RUNTIME_DIR/HOME. A multi-user.target service
 # has none of those and cannot attach to the display. lightdm autologin into the

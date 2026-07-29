@@ -4,6 +4,8 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SCRIPT="${REPO_ROOT}/image/piccie-lockdown.sh"
+SETUP="${REPO_ROOT}/image/setup-appliance.sh"
+SMOKE="${REPO_ROOT}/image/smoke-qemu.sh"
 PASS_COUNT=0
 
 fail() {
@@ -109,12 +111,28 @@ test_failed_readonly_enforcement_fails_closed() {
   cleanup_fixture
 }
 
+test_readonly_runtime_mountpoints_are_prepared() {
+  grep -Fq "install -d -m 0755 /var/cache/lightdm" "${SETUP}" \
+    || fail "LightDM cache mountpoint is not created before lockdown"
+}
+
+test_smoke_gate_rejects_local_filesystem_failures() {
+  grep -Fq 'grep -q "Reached target local-fs.target"' "${SMOKE}" \
+    || fail "smoke test does not require local-fs.target"
+  grep -Fq "Dependency failed for local-fs.target" "${SMOKE}" \
+    || fail "smoke test does not reject local-fs.target failure"
+  grep -Fq "Cannot open access to console" "${SMOKE}" \
+    || fail "smoke test does not reject locked emergency console"
+}
+
 for test_name in \
   test_readonly_root_is_accepted \
   test_writable_root_without_marker_is_forced_readonly \
   test_recovery_marker_remounts_and_verifies_writable \
   test_failed_recovery_remount_fails_closed \
-  test_failed_readonly_enforcement_fails_closed; do
+  test_failed_readonly_enforcement_fails_closed \
+  test_readonly_runtime_mountpoints_are_prepared \
+  test_smoke_gate_rejects_local_filesystem_failures; do
   "${test_name}"
   PASS_COUNT=$((PASS_COUNT + 1))
   echo "ok ${PASS_COUNT} - ${test_name#test_}"
