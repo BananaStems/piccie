@@ -1,27 +1,42 @@
 #!/bin/bash
-# Boot diagnostics snapshot. Writes to /data/diag (readable over SSH) AND, while
-# the FAT boot partition is still writable (boot 1, before read-only lockdown),
-# also to /boot/firmware so it can be read from a Mac with no network/console.
-# Runs late each boot via piccie-bootdiag.service and overwrites the file.
+# Boot diagnostics snapshot. Writes to /data/diag (readable over SSH) and the
+# writable FAT boot partition so it can be read from a Mac without a console.
+# Runs late each boot via piccie-bootdiag.service and keeps the prior snapshot.
 set +e
 
 mkdir -p /data/diag 2>/dev/null
+CURRENT=/data/diag/piccie-boot-diag.txt
+PREVIOUS=/data/diag/piccie-boot-diag.previous.txt
+COUNT_FILE=/data/diag/piccie-boot-count
+if [ -f "${CURRENT}" ]; then
+  mv -f "${CURRENT}" "${PREVIOUS}" 2>/dev/null
+fi
+COUNT="$(cat "${COUNT_FILE}" 2>/dev/null)"
+case "${COUNT}" in *[!0-9]*|"") COUNT=0;; esac
+COUNT=$((COUNT + 1))
+printf '%s\n' "${COUNT}" >"${COUNT_FILE}" 2>/dev/null
 TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 TMP="$(mktemp 2>/dev/null || echo /tmp/pbdiag.$$)"
 
 {
-  echo "=== piccie boot diag ${TS} ==="
+  echo "=== piccie boot diag ${TS}; persistent boot ${COUNT} ==="
   echo "### uname"; uname -a
   echo "### default target"; systemctl get-default
-  echo "### mounts (overlay/ro check)"
+  echo "### mounts (read-only root check)"
   echo "/      -> $(findmnt -no FSTYPE,OPTIONS / 2>&1)"
   echo "/boot/firmware -> $(findmnt -no FSTYPE,OPTIONS /boot/firmware 2>&1)"
   echo "/data  -> $(findmnt -no FSTYPE,OPTIONS /data 2>&1)"
   echo "### cmdline"; cat /proc/cmdline
-  echo "### appliance markers"; ls -l /data/.provisioned /data/.lockdown-done /data/.datapart-done /data/.DEGRADED /run/piccie.degraded /run/piccie-data-grow.failed 2>&1
+  echo "### appliance markers"; ls -l /data/.provisioned /data/.datapart-done /data/.DEGRADED /run/piccie.root-readonly /run/piccie.root-writable /run/piccie.degraded /run/piccie-data-grow.failed 2>&1
   echo "### data growth"; systemctl status piccie-grow-data --no-pager -l 2>&1 | tail -20
   echo "### data growth log"; journalctl -u piccie-grow-data -b --no-pager 2>&1 | tail -40
   echo "### failed units"; systemctl --failed --no-pager
+  echo "### reset evidence"
+  vcgencmd get_throttled 2>&1
+  for reason in /proc/device-tree/chosen/bootloader/reset_reason /sys/firmware/devicetree/base/chosen/bootloader/reset_reason; do
+    [ -r "${reason}" ] && { printf '%s: ' "${reason}"; tr -d '\0' <"${reason}"; echo; }
+  done
+  journalctl -b -1 -n 60 --no-pager 2>&1
   echo
   echo "### usb storage (bridge id for UAS quirk)"; lsusb 2>&1
   echo "--- uas/usb-storage modules ---"; lsmod | grep -E 'uas|usb_storage' 2>&1
@@ -50,7 +65,7 @@ TMP="$(mktemp 2>/dev/null || echo /tmp/pbdiag.$$)"
 } > "${TMP}" 2>&1
 
 # SSH-readable copy on /data (always).
-cp -f "${TMP}" /data/diag/piccie-boot-diag.txt 2>/dev/null
+cp -f "${TMP}" "${CURRENT}" 2>/dev/null
 # Mac-readable copy on the FAT partition when it's still writable (boot 1).
 cp -f "${TMP}" /boot/firmware/piccie-boot-diag.txt 2>/dev/null || true
 rm -f "${TMP}" 2>/dev/null

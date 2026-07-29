@@ -182,7 +182,9 @@ the engine starts, then removes the readable credential copy from the boot
 drive. It refuses incomplete files, unknown settings and degraded temporary
 storage. If validation fails, shut down and open `piccie-r2-status.txt` on the
 boot drive for the exact field to correct. The token should never grant access
-to any other bucket.
+to any other bucket. To rotate credentials later, place a newly completed
+`piccie-r2.txt` on the boot drive; the next boot validates and replaces the old
+R2 settings atomically.
 
 R2 remains private. Piccie creates signed guest download links that work for
 seven days, which is Cloudflare's maximum. Generate a new event link from the
@@ -203,9 +205,9 @@ remove power or the card during that restart.
    the soak test, then finish setup.
 
 Piccie uploads a temporary private strip and downloads it through a signed R2
-link before completing onboarding. It then restarts once more to enable the
-read-only system protection. Keep power connected until the admin screen
-appears.
+link before completing onboarding. The system partition is protected as
+read-only from the first boot, so completing setup does not trigger another
+restart. The menu appears immediately after the checks finish.
 
 ## 5. Check the booth
 
@@ -237,10 +239,12 @@ sudo DURATION_MINUTES=480 /data/app/current/scripts/pi_soak.sh
 
 The test uses the booth's configured camera, completes the full three-photo
 flow, waits for every R2 upload, downloads each guest link and byte-compares it
-with the local strip. It also checks the engine, Chromium, memory growth,
-temperature, throttling, free storage, upload backlog and process restarts. A
-healthy run ends with `soak_pass` and prints the log path. Do not use the booth
-for guests while this test is running.
+with the local strip. It also verifies that the active Wi-Fi profile is stored
+on `/data`, measures the real settings-preview frame rate, watches the kiosk
+page heartbeat, and checks the engine, Chromium, memory growth, temperature,
+throttling, free storage, upload backlog and process restarts. A healthy run
+ends with `soak_pass` and prints the log path. Do not use the booth for guests
+while this test is running.
 
 For development without R2 only, set `SKIP_UPLOAD_CHECK=1`. Never use that
 option for an event-readiness run.
@@ -251,6 +255,11 @@ on the booth at an event:
 ```bash
 journalctl -u piccie-engine
 ```
+
+The latest two persistent boot snapshots are kept in
+`/data/diag/piccie-boot-diag.txt` and
+`/data/diag/piccie-boot-diag.previous.txt`. They include a persistent boot
+count, reset/throttling evidence, service state and recent logs.
 
 ## Updating an installed booth
 

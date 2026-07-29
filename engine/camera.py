@@ -525,22 +525,33 @@ class CameraService:
         return jpeg
 
     def capture_preview_frame(self) -> bytes:
-        """Capture one fresh preview JPEG on demand. Used by the settings-screen
-        poller, which avoids a long-lived MJPEG <img> — that stream's decode
-        collides with the screen's slider/toggle repaints and wedges the Pi's
-        Chromium compositor (white screen)."""
+        """Wait for one newly produced preview JPEG. The settings screen uses
+        short requests instead of a long-lived MJPEG <img>, whose continuous
+        decode collides with slider repaints and can wedge Pi Chromium."""
         if not self._available:
             raise RuntimeError("Camera unavailable")
-        # Serve a recent frame instead of a fresh full-res make_image per poll —
-        # the on-demand capture is the expensive path on the Pi (full sensor-res
-        # copy + resize + encode) and the poller asks every ~130ms. A settings
-        # change drops _latest_jpeg, so a new grade/control still shows instantly.
-        with self._frame_lock:
-            if (
-                self._latest_jpeg is not None
-                and time.monotonic() - self._latest_jpeg_ts < 0.25
-            ):
-                return self._latest_jpeg
+
+        # Temporarily count this request as a viewer. That wakes the single
+        # preview producer and lets its configured FPS clock govern capture,
+        # avoiding a second direct camera capture racing the normal stream.
+        with self._frame_cond:
+            start_seq = self._frame_seq
+            self._viewers += 1
+            self._frame_cond.notify_all()
+            try:
+                self._frame_cond.wait_for(
+                    lambda: self._frame_seq != start_seq
+                    or self._stop_event.is_set(),
+                    timeout=max(0.5, self._preview_interval * 3),
+                )
+                jpeg = self._latest_jpeg
+            finally:
+                self._viewers = max(0, self._viewers - 1)
+                self._frame_cond.notify_all()
+        if jpeg is not None:
+            return jpeg
+
+        # Startup fallback if the producer has not delivered its first frame.
         with self._camera_lock:
             jpeg = self._capture_preview_jpeg()
         with self._frame_lock:

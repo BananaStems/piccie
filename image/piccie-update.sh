@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 # Install a code-only release from /data/app/incoming and roll back on failure.
 set -euo pipefail
+export PATH=/usr/bin:/bin
+
+[[ "$(id -u)" -ne 0 ]] || {
+  echo "piccie-update must run as the unprivileged pi user" >&2
+  exit 2
+}
 
 ARCHIVE="${1:-}"
 APP_DIR=/data/app
@@ -62,7 +68,7 @@ PREVIOUS="$(readlink -f "${CURRENT}")"
 rm -f -- "${APP_DIR}/current.next"
 ln -s "${DEST}" "${APP_DIR}/current.next"
 mv -Tf "${APP_DIR}/current.next" "${CURRENT}"
-systemctl restart piccie-engine.service
+sudo -n /usr/local/sbin/piccie-restart-engine
 
 HEALTHY=false
 for _ in $(seq 1 30); do
@@ -78,7 +84,7 @@ if [[ "${HEALTHY}" != true ]]; then
   rm -f -- "${APP_DIR}/current.next"
   ln -s "${PREVIOUS}" "${APP_DIR}/current.next"
   mv -Tf "${APP_DIR}/current.next" "${CURRENT}"
-  systemctl restart piccie-engine.service
+  sudo -n /usr/local/sbin/piccie-restart-engine
   exit 4
 fi
 

@@ -116,22 +116,17 @@ def import_boot_config(
         existing = json.loads(destination.read_text()) if destination.exists() else {}
         if not isinstance(existing, dict):
             raise BootConfigError("Existing Piccie configuration is invalid.")
-        existing_r2 = existing.get("r2")
-        required = {"account_id", "access_key", "secret_key", "bucket"}
-        if not isinstance(existing_r2, dict) or not all(
-            existing_r2.get(key) for key in required
-        ):
-            existing["r2"] = r2
-            write_json_atomic(destination, existing)
-            destination.chmod(0o600)
-            try:
-                pi = pwd.getpwnam("pi")
-                os.chown(destination, pi.pw_uid, pi.pw_gid)
-            except (KeyError, PermissionError):
-                pass
+        existing["r2"] = r2
+        write_json_atomic(destination, existing)
+        destination.chmod(0o600)
+        try:
+            pi = pwd.getpwnam("pi")
+            os.chown(destination, pi.pw_uid, pi.pw_gid)
+        except (KeyError, PermissionError):
+            pass
         source.unlink()
         _write_status(
-            "R2 settings imported successfully. The credential copy was removed.",
+            "R2 settings imported or updated successfully. The credential copy was removed.",
             status_path,
         )
         return True

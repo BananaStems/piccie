@@ -36,6 +36,13 @@ const DATE_ROWS = [
   ["done"],
 ];
 
+const PIN_ROWS = [
+  ["1", "2", "3"],
+  ["4", "5", "6"],
+  ["7", "8", "9"],
+  ["backspace", "0", "done"],
+];
+
 function isEditableInput(el) {
   if (!el || el.closest("#osk-panel")) return false;
   return el.matches(
@@ -43,13 +50,24 @@ function isEditableInput(el) {
   );
 }
 
-function layoutForInput(input) {
+export function layoutForInput(input) {
+  if (input.dataset?.oskLayout === "pin") return "pin";
   // .osk-date is a plain text field that wants the numeric/date key layout (we
   // avoid type=date so the browser's own calendar popup never appears).
   if (input.type === "date" || input.inputMode === "numeric" || input.classList.contains("osk-date")) {
     return "date";
   }
   return "text";
+}
+
+export function rowsForLayout(name) {
+  if (name === "pin") return PIN_ROWS;
+  if (name === "date") return DATE_ROWS;
+  return textRows();
+}
+
+export function normalizePinValue(value, maxLength = 8) {
+  return String(value).replace(/\D/g, "").slice(0, maxLength);
 }
 
 function encodeKey(key) {
@@ -68,7 +86,7 @@ function textRows() {
 
 function renderKeys() {
   if (!keysEl) return;
-  const rows = layout === "date" ? DATE_ROWS : textRows();
+  const rows = rowsForLayout(layout);
   keysEl.innerHTML = rows
     .map(
       (row) => `
@@ -285,6 +303,16 @@ export function initOnScreenKeyboard() {
         return;
       }
       if (activeInput) closeOnScreenKeyboard();
+    },
+    true,
+  );
+
+  boothFrame.addEventListener(
+    "input",
+    (e) => {
+      if (!e.target?.classList?.contains("pin-input")) return;
+      const sanitized = normalizePinValue(e.target.value, e.target.maxLength || 8);
+      if (sanitized !== e.target.value) e.target.value = sanitized;
     },
     true,
   );

@@ -25,3 +25,7 @@ jobs:
       - run: node --test web/test/*.test.mjs
       - run: bash -n image/*.sh scripts/*.sh
       - run: bash image/test-grow-data.sh
+      - run: bash image/test-readonly-root.sh
+      - run: bash image/test-performance.sh
+      - run: bash image/test-shutdown.sh
+      - run: bash image/test-clock-sync.sh

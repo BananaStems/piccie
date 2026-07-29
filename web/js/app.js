@@ -122,7 +122,7 @@ function showConfirm({ title, message, confirmLabel = "Confirm", cancelLabel = "
 }
 
 // cancelled. The input focuses on open, which raises the on-screen keyboard.
-function promptText({ title, value = "", placeholder = "", confirmLabel = "Save", cancelLabel = "Cancel", required = true, maxLength = 80, type = "text", inputMode = "text" }) {
+function promptText({ title, value = "", placeholder = "", confirmLabel = "Save", cancelLabel = "Cancel", required = true, maxLength = 80, type = "text", inputMode = "text", pin = false }) {
   return new Promise((resolve) => {
     const frame = document.getElementById("booth-frame");
     const overlay = document.createElement("div");
@@ -138,13 +138,24 @@ function promptText({ title, value = "", placeholder = "", confirmLabel = "Save"
     titleEl.textContent = title;
 
     const input = document.createElement("input");
-    input.className = "prompt-input";
-    input.type = type;
-    input.inputMode = inputMode;
+    input.className = `prompt-input${pin ? " pin-input" : ""}`;
+    // Chromium offers to save any submitted password-type value. PINs are
+    // visually masked with CSS instead, so they never enter password-manager
+    // heuristics while remaining private on screen.
+    input.type = pin ? "text" : type;
+    input.inputMode = pin ? "numeric" : inputMode;
     input.value = value;
     input.placeholder = placeholder;
     input.maxLength = maxLength;
     input.setAttribute("autocomplete", "off");
+    if (pin) {
+      input.dataset.oskLayout = "pin";
+      input.pattern = "[0-9]*";
+      input.setAttribute("autocapitalize", "none");
+      input.setAttribute("spellcheck", "false");
+      input.setAttribute("data-1p-ignore", "true");
+      input.setAttribute("data-lpignore", "true");
+    }
 
     const actions = document.createElement("div");
     actions.className = "confirm-actions";
@@ -342,8 +353,7 @@ async function requestOperatorUnlock() {
     const pin = await promptText({
       title,
       confirmLabel: "Unlock",
-      type: "password",
-      inputMode: "numeric",
+      pin: true,
       maxLength: 8,
     });
     if (!pin) return false;
@@ -379,10 +389,12 @@ async function handleCornerTap() {
 function renderAdminLock() {
   app.innerHTML = `
     <div class="screen centered">
-      <form class="confirm-panel prompt-panel" id="admin-unlock-form">
+      <form class="confirm-panel prompt-panel" id="admin-unlock-form" autocomplete="off">
         <h2 class="confirm-title">Operator PIN</h2>
-        <input class="prompt-input" id="admin-pin" type="password" inputmode="numeric"
-          maxlength="8" autocomplete="off" aria-label="Operator PIN" />
+        <input class="prompt-input pin-input" id="admin-pin" type="text" inputmode="numeric"
+          data-osk-layout="pin" pattern="[0-9]*" maxlength="8" autocomplete="off"
+          autocapitalize="none" spellcheck="false" data-1p-ignore="true" data-lpignore="true"
+          aria-label="Operator PIN" />
         <p class="form-error" id="admin-pin-error" role="alert"></p>
         <button class="btn" type="submit">Unlock</button>
       </form>

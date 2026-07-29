@@ -60,7 +60,7 @@ def client(tmp_path, monkeypatch):
 def test_operator_auth_event_and_capture_flow(client):
     test_client, app = client
     status = test_client.get("/api/status").json()
-    assert status["version"] == "1.0.6"
+    assert status["version"] == "1.0.7"
     assert status["build"]
     app.state.config_store.set_admin_pin("2468")
     event_body = {
@@ -105,6 +105,26 @@ def test_operator_auth_event_and_capture_flow(client):
     assert finalized.status_code == 200
     assert finalized.json()["strip_local_url"].endswith("/strip")
     assert test_client.get(finalized.json()["strip_local_url"]).status_code == 200
+    assert app.state.storage.get_event(event["id"]).photo_count == 1
+
+    # Simulate power loss after strip.jpg was atomically written but before the
+    # final DB/meta transaction completed. Retrying must repair, not double count.
+    with app.state.storage._connect() as conn:
+        conn.execute(
+            "UPDATE sessions SET finalized_at = NULL WHERE id = ?", (session_id,)
+        )
+        conn.execute(
+            "UPDATE events SET photo_count = 0 WHERE id = ?", (event["id"],)
+        )
+    app.state.storage.session_meta_path(
+        app.state.storage.get_session(session_id)
+    ).unlink(missing_ok=True)
+    repaired = test_client.post(f"/api/sessions/{session_id}/finalize")
+    assert repaired.status_code == 200
+    assert app.state.storage.get_event(event["id"]).photo_count == 1
+    assert app.state.storage.get_session_meta(
+        app.state.storage.get_session(session_id)
+    )["r2_target"].endswith(session_id)
 
     cleared = test_client.put(
         "/api/admin/active-event", json={"event_id": None}, headers=headers
@@ -339,9 +359,9 @@ def test_kiosk_onboarding_requires_imported_r2_then_finishes(client, monkeypatch
         },
     )
     assert completed.status_code == 200
-    assert completed.json()["restarting"] is True
+    assert completed.json()["restarting"] is False
     assert (tmp_path / ".provisioned").exists()
-    assert (tmp_path / ".lockdown-requested").exists()
+    assert not (tmp_path / ".lockdown-requested").exists()
     assert (tmp_path / "ssh" / "authorized_keys").read_text() == "ssh-ed25519 AAAATEST operator\n"
     assert app.state.config_store.ensure().r2.bucket == "photo-strips"
     assert test_client.post("/api/admin/unlock", json={"pin": "2468"}).status_code == 200

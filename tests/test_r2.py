@@ -1,5 +1,8 @@
 from unittest.mock import MagicMock
 
+import pytest
+
+from engine.clock import CLOCK_SYNC_ERROR
 from engine.config import R2Config
 from engine.paths import (
     r2_event_archive_key,
@@ -53,19 +56,39 @@ def test_upload_session_returns_signed_private_object_url(tmp_path):
     uploader = uploader_with_mock_client()
     event = "11111111-1111-4111-8111-111111111111"
     session = "22222222-2222-4222-8222-222222222222"
-    token = f"{event}.{session}.secret"
     (tmp_path / "strip.jpg").write_bytes(b"jpeg")
 
-    url, returned_token = uploader.upload_session(
-        tmp_path, event, session, "Sarah & James", "2026-06-14", share_token=token
-    )
+    url = uploader.upload_session(tmp_path, event, session)
 
     strip_key = r2_event_strip_key(event, session)
     assert url == f"https://signed.example/{strip_key}?expires=604800"
-    assert returned_token == token
     assert uploader.client.upload_file.call_args.args[2] == strip_key
-    keys = {call.kwargs["Key"] for call in uploader.client.put_object.call_args_list}
-    assert keys == {f"events/{event}/manifest.json"}
+    uploader.client.put_object.assert_not_called()
+
+
+def test_r2_waits_for_clock_before_every_signed_operation(tmp_path, monkeypatch):
+    waits = []
+    monkeypatch.setattr("engine.r2.wait_for_system_clock", lambda: waits.append(True))
+    uploader = uploader_with_mock_client()
+    (tmp_path / "strip.jpg").write_bytes(b"jpeg")
+
+    uploader.upload_session(tmp_path, "event", "session")
+
+    assert len(waits) == 2
+
+
+def test_r2_replaces_raw_clock_skew_with_actionable_error(tmp_path, monkeypatch):
+    monkeypatch.setattr("engine.r2.wait_for_system_clock", lambda: None)
+    uploader = uploader_with_mock_client()
+    uploader.client.upload_file.side_effect = RuntimeError(
+        "An error occurred (RequestTimeTooSkewed) when calling PutObject"
+    )
+    (tmp_path / "strip.jpg").write_bytes(b"jpeg")
+
+    with pytest.raises(RuntimeError, match="clock has not synchronized") as exc:
+        uploader.upload_session(tmp_path, "event", "session")
+
+    assert str(exc.value) == CLOCK_SYNC_ERROR
 
 
 def test_publish_event_uploads_static_gallery_then_revokes_old_link(tmp_path):
@@ -154,8 +177,9 @@ def test_gallery_html_lists_every_paginated_strip():
 def test_delete_event_target_removes_every_object_under_prefix():
     uploader = uploader_with_mock_client()
     event = "11111111-1111-4111-8111-111111111111"
+    object_key = f"events/{event}/sessions/old/strip.jpg"
     uploader.client.list_objects_v2.return_value = {
-        "Contents": [{"Key": f"events/{event}/manifest.json"}],
+        "Contents": [{"Key": object_key}],
         "IsTruncated": False,
     }
 
@@ -165,7 +189,7 @@ def test_delete_event_target_removes_every_object_under_prefix():
         Bucket="photos", Prefix=f"events/{event}/"
     )
     deleted = uploader.client.delete_objects.call_args.kwargs["Delete"]["Objects"]
-    assert deleted == [{"Key": f"events/{event}/manifest.json"}]
+    assert deleted == [{"Key": object_key}]
 
 
 def test_disable_event_share_removes_exact_static_page():

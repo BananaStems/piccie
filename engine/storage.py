@@ -97,6 +97,7 @@ class Session:
     upload_error: str | None = None
     upload_attempts: int = 0
     upload_updated_at: str | None = None
+    finalized_at: str | None = None
 
 
 class Storage:
@@ -140,6 +141,7 @@ class Storage:
                     r2_strip_url TEXT,
                     local_path TEXT NOT NULL,
                     upload_status TEXT NOT NULL DEFAULT 'pending',
+                    finalized_at TEXT,
                     FOREIGN KEY (event_id) REFERENCES events(id)
                 );
                 CREATE TABLE IF NOT EXISTS r2_deletions (
@@ -181,6 +183,8 @@ class Storage:
             )
         if "upload_updated_at" not in cols:
             conn.execute("ALTER TABLE sessions ADD COLUMN upload_updated_at TEXT")
+        if "finalized_at" not in cols:
+            conn.execute("ALTER TABLE sessions ADD COLUMN finalized_at TEXT")
         conn.execute(
             """
             UPDATE sessions
@@ -470,12 +474,61 @@ class Storage:
         with self._connect() as conn:
             conn.execute("DELETE FROM r2_deletions WHERE basename = ?", (target,))
 
-    def increment_event_photo_count(self, event_id: str) -> None:
+    def mark_session_finalized(self, session_id: str) -> None:
+        """Atomically count a composed strip exactly once."""
+        finalized_at = datetime.now(timezone.utc).isoformat()
         with self._connect() as conn:
-            conn.execute(
-                "UPDATE events SET photo_count = photo_count + 1 WHERE id = ?",
-                (event_id,),
+            row = conn.execute(
+                "SELECT event_id FROM sessions WHERE id = ?", (session_id,)
+            ).fetchone()
+            if not row:
+                return
+            updated = conn.execute(
+                """
+                UPDATE sessions SET finalized_at = ?
+                WHERE id = ? AND finalized_at IS NULL
+                """,
+                (finalized_at, session_id),
             )
+            if updated.rowcount:
+                conn.execute(
+                    "UPDATE events SET photo_count = photo_count + 1 WHERE id = ?",
+                    (row["event_id"],),
+                )
+
+    def reconcile_finalized_sessions(self) -> int:
+        """Repair finalization interrupted after the atomic strip write."""
+        with self._connect() as conn:
+            rows = conn.execute("SELECT id, local_path FROM sessions").fetchall()
+        completed = [
+            row["id"]
+            for row in rows
+            if jpeg_is_intact(Path(row["local_path"]) / "strip.jpg")
+        ]
+        with self._connect() as conn:
+            conn.executemany(
+                """
+                UPDATE sessions
+                SET finalized_at = COALESCE(finalized_at, ?)
+                WHERE id = ?
+                """,
+                (
+                    (datetime.now(timezone.utc).isoformat(), session_id)
+                    for session_id in completed
+                ),
+            )
+            conn.execute("UPDATE events SET photo_count = 0")
+            conn.execute(
+                """
+                UPDATE events
+                SET photo_count = (
+                    SELECT COUNT(*) FROM sessions
+                    WHERE sessions.event_id = events.id
+                      AND sessions.finalized_at IS NOT NULL
+                )
+                """
+            )
+        return len(completed)
 
     def template_event_count(self, template_id: str) -> int:
         with self._connect() as conn:
@@ -505,18 +558,39 @@ class Storage:
         except (OSError, json.JSONDecodeError):
             return {}
 
-    def list_sessions_needing_upload(self) -> list[Session]:
+    def list_sessions_needing_upload(
+        self, *, now: datetime | None = None
+    ) -> list[Session]:
+        current = now or datetime.now(timezone.utc)
         sessions: list[Session] = []
         with self._connect() as conn:
             rows = conn.execute(
                 """
                 SELECT * FROM sessions
                 WHERE upload_status IN ('pending', 'failed', 'uploading')
-                ORDER BY created_at ASC
+                ORDER BY
+                    CASE upload_status
+                        WHEN 'pending' THEN 0
+                        WHEN 'uploading' THEN 1
+                        ELSE 2
+                    END,
+                    created_at DESC
                 """
             ).fetchall()
         for row in rows:
             session = self._row_to_session(row)
+            if session.upload_status == "failed" and session.upload_updated_at:
+                try:
+                    updated = datetime.fromisoformat(session.upload_updated_at)
+                    if updated.tzinfo is None:
+                        updated = updated.replace(tzinfo=timezone.utc)
+                    delay = timedelta(
+                        seconds=30 * (2 ** min(max(session.upload_attempts - 1, 0), 5))
+                    )
+                    if current < updated + delay:
+                        continue
+                except ValueError:
+                    pass
             session_dir = Path(session.local_path)
             strip = session_dir / "strip.jpg"
             # R2 publishes only the composed strip. Source photos may already have
@@ -549,33 +623,47 @@ class Storage:
         return meta.get("r2_target")
 
     def sweep_orphan_dirs(self) -> int:
-        """Reclaim event/session directories with no matching DB row. Deletes
-        commit the DB row then rmtree the dir; a power yank between the two
-        leaves an orphan dir that would otherwise fill the disk forever. Run at
-        boot after the DB is open."""
+        """Quarantine directories missing a DB row; never destroy guest photos.
+
+        A missing/rebuilt database is indistinguishable from a directory left
+        behind by an interrupted delete, so automatic removal is unsafe.
+        """
         if not self.events_dir.exists():
             return 0
         with self._connect() as conn:
             event_ids = {row[0] for row in conn.execute("SELECT id FROM events")}
             session_ids = {row[0] for row in conn.execute("SELECT id FROM sessions")}
-        removed = 0
+        quarantined = 0
+        recovery_dir = self.events_dir.parent / "recovered-orphans"
+
+        def quarantine(path: Path) -> None:
+            nonlocal quarantined
+            recovery_dir.mkdir(parents=True, exist_ok=True)
+            target = recovery_dir / path.name
+            if target.exists():
+                target = recovery_dir / f"{path.name}-{uuid.uuid4().hex[:8]}"
+            os.replace(path, target)
+            quarantined += 1
+
         for event_dir in self.events_dir.iterdir():
             if not event_dir.is_dir():
                 continue
             if event_dir.name not in event_ids:
-                shutil.rmtree(event_dir, ignore_errors=True)
-                removed += 1
+                quarantine(event_dir)
                 continue
             sessions_dir = event_dir / "sessions"
             if not sessions_dir.exists():
                 continue
             for session_dir in sessions_dir.iterdir():
                 if session_dir.is_dir() and session_dir.name not in session_ids:
-                    shutil.rmtree(session_dir, ignore_errors=True)
-                    removed += 1
-        if removed:
-            logger.info("Swept %s orphan director(ies)", removed)
-        return removed
+                    quarantine(session_dir)
+        if quarantined:
+            logger.warning(
+                "Quarantined %s unindexed photo director(ies) in %s",
+                quarantined,
+                recovery_dir,
+            )
+        return quarantined
 
     def prune_abandoned_sessions(self, max_age_hours: int = 24) -> int:
         cutoff = datetime.now(timezone.utc) - timedelta(hours=max_age_hours)
@@ -636,4 +724,5 @@ class Storage:
             upload_updated_at=(
                 row["upload_updated_at"] if "upload_updated_at" in keys else None
             ),
+            finalized_at=row["finalized_at"] if "finalized_at" in keys else None,
         )

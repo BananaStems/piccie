@@ -63,22 +63,25 @@ PY
   ROOT_DEV="/dev/mmcblk1p2"
   # Do not pass boot/initramfs8 — it is modules-only and breaks handoff to systemd.
   # systemd.firstboot=off avoids repeated reboots from first-boot wizard on resized images.
-  APPEND="earlycon=pl011,mmio32,0xfe201000 console=ttyAMA0,115200 root=${ROOT_DEV} rw rootwait rootfstype=ext4 piccie.qemu=1 dwc_otg.fiq_fsm_enable=0 systemd.firstboot=off systemd.condition_first_boot=0 nowatchdog systemd.watchdog=0 systemd.unit=multi-user.target systemd.mask=lightdm.service systemd.mask=systemd-growfs-root.service systemd.mask=rpi-resize-swap-file.service"
+  APPEND="earlycon=pl011,mmio32,0xfe201000 console=ttyAMA0,115200 root=${ROOT_DEV} ro rootwait rootfstype=ext4 piccie.qemu=1 dwc_otg.fiq_fsm_enable=0 systemd.firstboot=off systemd.condition_first_boot=0 systemd.log_target=kmsg systemd.journald.forward_to_console=1 nowatchdog systemd.watchdog=0 systemd.unit=multi-user.target systemd.mask=lightdm.service systemd.mask=systemd-remount-fs.service systemd.mask=systemd-growfs-root.service systemd.mask=rpi-resize-swap-file.service"
 else
   DTB="${BOOT_DIR}/bcm2710-rpi-3-b-plus.dtb"
   CPU="cortex-a53"
   MACHINE="raspi3b"
   MEMORY="1G"
   ROOT_DEV="/dev/mmcblk0p2"
-  APPEND="console=ttyAMA0,115200 root=${ROOT_DEV} rw rootwait rootfstype=ext4 piccie.qemu=1"
+  APPEND="console=ttyAMA0,115200 root=${ROOT_DEV} ro rootwait rootfstype=ext4 piccie.qemu=1 systemd.log_target=kmsg systemd.journald.forward_to_console=1"
   echo "Warning: Pi 4 DTB not found — falling back to Pi 3B (may hang on splash)." >&2
 fi
 
-QEMU_IMG="${REPO_ROOT}/.pi-gen/deploy/piccie-qemu.img"
+QEMU_IMG="${REPO_ROOT}/.pi-gen/deploy/piccie-qemu.qcow2"
 mkdir -p "$(dirname "${QEMU_IMG}")"
 if [[ "${PICCIE_QEMU_FRESH:-0}" == "1" || ! -f "${QEMU_IMG}" \
     || ( "${REUSE_IMAGE}" != "1" && "${IMG}" -nt "${QEMU_IMG}" ) ]]; then
-  cp "${IMG}" "${QEMU_IMG}"
+  rm -f "${QEMU_IMG}"
+  # Keep the release image immutable and record only changed blocks. A copied
+  # ~12 GiB raw image can exhaust a developer Mac during repeated smoke tests.
+  qemu-img create -q -f qcow2 -F raw -b "${IMG}" "${QEMU_IMG}"
 fi
 SOURCE_IMG_SIZE="$(qemu-img info --output=json "${IMG}" | python3 -c 'import json, sys; print(json.load(sys.stdin)["virtual-size"])')"
 QEMU_IMG_SIZE="$(qemu-img info --output=json "${QEMU_IMG}" | python3 -c 'import json, sys; print(json.load(sys.stdin)["virtual-size"])')"
@@ -88,7 +91,7 @@ QEMU_IMG_SIZE="$(qemu-img info --output=json "${QEMU_IMG}" | python3 -c 'import 
 }
 QEMU_TARGET_SIZE=$((SOURCE_IMG_SIZE + EXTRA_SIZE))
 if (( QEMU_IMG_SIZE < QEMU_TARGET_SIZE )); then
-  qemu-img resize -f raw "${QEMU_IMG}" "${QEMU_TARGET_SIZE}" >/dev/null
+  qemu-img resize -f qcow2 "${QEMU_IMG}" "${QEMU_TARGET_SIZE}" >/dev/null
 fi
 
 DISPLAY_ARGS=(-display cocoa)
@@ -110,7 +113,7 @@ QEMU_ARGS=(
   -m "${MEMORY}"
   -kernel "${BOOT_DIR}/kernel8.img"
   -dtb "${DTB}"
-  -drive "file=${QEMU_IMG},format=raw,if=sd"
+  -drive "file=${QEMU_IMG},format=qcow2,if=sd"
   -append "${APPEND}"
   -usb
   -netdev "user,id=net0,hostfwd=tcp:127.0.0.1:${SSH_PORT}-:22,hostfwd=tcp:127.0.0.1:${HTTP_PORT}-:8080"

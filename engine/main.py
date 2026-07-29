@@ -56,6 +56,7 @@ async def lifespan(app: FastAPI):
     app.state.kiosk_watchdog = KioskWatchdog()
     storage.prune_abandoned_sessions()
     storage.sweep_orphan_dirs()
+    storage.reconcile_finalized_sessions()
     app.state.upload_queue.resume_pending()
     app.state.upload_queue.check_cloud_health_async()
     yield
@@ -72,6 +73,11 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Piccie Engine", lifespan=lifespan)
 
 
+@app.get("/healthz", response_class=PlainTextResponse)
+def healthz() -> str:
+    return "ok"
+
+
 def lan_request_allowed(host: str, path: str) -> bool:
     try:
         if ip_address(host).is_loopback:
@@ -80,6 +86,7 @@ def lan_request_allowed(host: str, path: str) -> bool:
         if host == "testclient":
             return True
     exact = {
+        "/healthz",
         "/studio.html",
         "/css/studio.css",
         "/js/studio.js",

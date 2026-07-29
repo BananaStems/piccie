@@ -11,6 +11,15 @@ rsync -a "${BASE_DIR}/piccie-src/" "${ROOTFS_DIR}/opt/piccie/" \
 	--exclude __pycache__ \
 	--exclude config/local.json
 
+# Apply Piccie's boot contract in the final custom stage as well as stage1.
+# pi-gen keeps later-stage rootfs snapshots during --continue/--incremental
+# builds, so relying on the stage1 copy can silently export stale cmdline/fstab
+# files. The export stage replaces the PARTUUID placeholders after this.
+install -m 644 "${BASE_DIR}/piccie-src/image/pigen/cmdline.txt" \
+	"${ROOTFS_DIR}/boot/firmware/cmdline.txt"
+install -m 644 "${BASE_DIR}/piccie-src/image/pigen/fstab" \
+	"${ROOTFS_DIR}/etc/fstab"
+
 install -d "${ROOTFS_DIR}/etc/lightdm/lightdm.conf.d"
 install -m 644 "${BASE_DIR}/piccie-src/image/pi-gen/stage2-piccie/files/lightdm/50-piccie.conf" \
 	"${ROOTFS_DIR}/etc/lightdm/lightdm.conf.d/50-piccie.conf"

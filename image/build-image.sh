@@ -78,8 +78,29 @@ rsync -a \
   "${REPO_ROOT}/LICENSE" \
   "${REPO_ROOT}/THIRD_PARTY_NOTICES.md" \
   "${PI_GEN_DIR}/piccie-src/"
-printf '%s\n' "$(git -C "${REPO_ROOT}" rev-parse --short HEAD 2>/dev/null || echo image)" \
-  > "${PI_GEN_DIR}/piccie-src/BUILD"
+REV="$(git -C "${REPO_ROOT}" rev-parse --short HEAD 2>/dev/null || echo image)"
+if [[ -n "$(git -C "${REPO_ROOT}" status --porcelain 2>/dev/null)" ]]; then
+  SOURCE_HASH="$(python3 - "${PI_GEN_DIR}/piccie-src" <<'PY'
+import hashlib
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[1])
+digest = hashlib.sha256()
+for path in sorted(item for item in root.rglob("*") if item.is_file()):
+    relative = path.relative_to(root).as_posix()
+    if relative == "BUILD":
+        continue
+    digest.update(relative.encode())
+    digest.update(b"\0")
+    digest.update(path.read_bytes())
+    digest.update(b"\0")
+print(digest.hexdigest()[:12])
+PY
+)"
+  REV="${REV}-dirty-${SOURCE_HASH}"
+fi
+printf '%s\n' "${REV}" > "${PI_GEN_DIR}/piccie-src/BUILD"
 install -m 644 "${REPO_ROOT}/config/local.example.json" \
   "${PI_GEN_DIR}/piccie-src/config/local.example.json"
 

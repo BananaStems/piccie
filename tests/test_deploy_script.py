@@ -80,5 +80,33 @@ def test_deploy_pushes_release_and_reloads_kiosk(tmp_path):
     commands = log.read_text()
     assert "pi@192.168.1.145" in commands
     assert "/usr/local/sbin/piccie-update" in commands
+    assert "sudo -n /usr/local/sbin/piccie-update" not in commands
     assert "pkill -x chromium" in commands
     assert "Deployed " in result.stdout
+
+
+def test_updater_extracts_as_pi_and_has_only_narrow_restart_privilege():
+    updater = (ROOT / "image" / "piccie-update.sh").read_text()
+    restart_helper = (ROOT / "image" / "piccie-restart-engine").read_text()
+    sudoers = (
+        ROOT / "image" / "files" / "piccie-restart-engine-sudoers"
+    ).read_text()
+
+    assert "must run as the unprivileged pi user" in updater
+    assert "sudo -n /usr/local/sbin/piccie-restart-engine" in updater
+    assert "systemctl restart piccie-engine.service" not in updater
+    assert "exec /usr/bin/systemctl restart piccie-engine.service" in restart_helper
+    assert sudoers.strip().endswith("/usr/local/sbin/piccie-restart-engine")
+    assert "piccie-update" not in sudoers
+
+
+def test_image_build_identity_and_release_gate_cover_dirty_source():
+    builder = (ROOT / "image" / "build-image.sh").read_text()
+    release = (ROOT / "image" / "release-image.sh").read_text()
+
+    assert "-dirty-${SOURCE_HASH}" in builder
+    assert "path.read_bytes()" in builder
+    assert "release requires a clean worktree" in release
+    assert "bash image/test-appliance.sh" in release
+    assert 'gh release upload "${TAG}"' in release
+    assert "--clobber" in release

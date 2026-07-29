@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import itertools
 import logging
 import queue
 import threading
@@ -15,8 +16,7 @@ from engine.storage import Storage
 logger = logging.getLogger(__name__)
 
 MAX_QUEUE_SIZE = 50
-MAX_RETRIES = 3
-RETRY_BASE_SECONDS = 2
+HISTORICAL_QUEUE_LIMIT = 40
 RESCAN_INTERVAL_SECONDS = 30
 
 
@@ -32,7 +32,10 @@ class UploadQueue:
     def __init__(self, storage: Storage, config_store: ConfigStore) -> None:
         self.storage = storage
         self.config_store = config_store
-        self._queue: queue.Queue[UploadJob | None] = queue.Queue(maxsize=MAX_QUEUE_SIZE)
+        self._queue: queue.PriorityQueue[
+            tuple[int, int, UploadJob]
+        ] = queue.PriorityQueue(maxsize=MAX_QUEUE_SIZE)
+        self._sequence = itertools.count()
         self._uploader: R2Uploader | None = None
         self._uploader_key: tuple[str, ...] | None = None
         self._cloud_lock = threading.Lock()
@@ -87,14 +90,25 @@ class UploadQueue:
     def check_cloud_health_async(self) -> None:
         threading.Thread(target=self.check_cloud_health, daemon=True).start()
 
-    def enqueue(self, job: UploadJob, block: bool = True, timeout: float = 30) -> None:
+    def enqueue(
+        self,
+        job: UploadJob,
+        block: bool = True,
+        timeout: float = 30,
+        *,
+        historical: bool = False,
+    ) -> None:
         with self._inflight_lock:
             if job.session_id in self._inflight:
                 return  # already queued/processing; don't duplicate
             self._inflight.add(job.session_id)
             self._inflight_events[job.session_id] = job.event_id
         try:
-            self._queue.put(job, block=block, timeout=timeout)
+            self._queue.put(
+                (1 if historical else 0, next(self._sequence), job),
+                block=block,
+                timeout=timeout,
+            )
         except queue.Full as exc:
             with self._inflight_lock:
                 self._inflight.discard(job.session_id)
@@ -156,6 +170,10 @@ class UploadQueue:
         sessions = self.storage.list_sessions_needing_upload()
         resumed = 0
         for session in sessions:
+            # Leave ten slots for strips being made now. Historical recovery
+            # must never make a current guest wait behind an old outage.
+            if self._queue.qsize() >= HISTORICAL_QUEUE_LIMIT:
+                break
             try:
                 self.enqueue(
                     UploadJob(
@@ -164,6 +182,7 @@ class UploadQueue:
                         session_dir=Path(session.local_path),
                     ),
                     block=False,
+                    historical=True,
                 )
                 resumed += 1
             except RuntimeError:
@@ -201,18 +220,20 @@ class UploadQueue:
         return self._uploader
 
     def _worker(self) -> None:
-        while True:
-            job = self._queue.get()
-            if job is None:
-                return
+        while not self._stop_event.is_set():
             try:
-                self._process_with_retry(job)
+                _priority, _sequence, job = self._queue.get(timeout=1)
+            except queue.Empty:
+                continue
+            try:
+                self._process(job)
             except Exception as exc:
                 logger.exception("Upload failed for %s: %s", job.session_id, exc)
                 self.storage.update_session_upload(
                     job.session_id,
                     "failed",
                     error=str(exc) or type(exc).__name__,
+                    increment_attempt=True,
                 )
                 self._set_cloud_health(False, str(exc) or type(exc).__name__)
             finally:
@@ -220,34 +241,6 @@ class UploadQueue:
                     self._inflight.discard(job.session_id)
                     self._inflight_events.pop(job.session_id, None)
                 self._queue.task_done()
-
-    def _process_with_retry(self, job: UploadJob) -> None:
-        last_exc: Exception | None = None
-        for attempt in range(MAX_RETRIES):
-            try:
-                self._process(job)
-                return
-            except Exception as exc:
-                last_exc = exc
-                self.storage.update_session_upload(
-                    job.session_id,
-                    "failed",
-                    error=str(exc) or type(exc).__name__,
-                    increment_attempt=True,
-                )
-                if attempt < MAX_RETRIES - 1:
-                    delay = RETRY_BASE_SECONDS * (2**attempt)
-                    logger.warning(
-                        "Upload attempt %s failed for %s, retry in %ss: %s",
-                        attempt + 1,
-                        job.session_id,
-                        delay,
-                        exc,
-                    )
-                    if getattr(self, "_stop_event", threading.Event()).wait(delay):
-                        return
-        if last_exc:
-            raise last_exc
 
     def _resolve_target(self, job: UploadJob) -> str:
         if job.cloud_target:
@@ -285,30 +278,10 @@ class UploadQueue:
             )
             return
         self.storage.update_session_upload(job.session_id, "uploading")
-        session = self.storage.get_session(job.session_id)
-        meta = self.storage.get_session_meta(session) if session else {}
-        share_token = meta.get("share_token")
-        if session and not share_token:
-            # Persist the token before the first network side effect so retries
-            # keep stable session metadata across a power loss.
-            share_token = R2Uploader.new_session_share_token(event.id, job.session_id)
-            meta = self.storage.merge_session_meta(
-                session,
-                {
-                    "session_id": job.session_id,
-                    "event_id": job.event_id,
-                    "r2_target": target,
-                    "share_token": share_token,
-                    "upload_status": "pending",
-                },
-            )
-        download_url, share_token = uploader.upload_session(
+        download_url = uploader.upload_session(
             job.session_dir,
             event.id,
             job.session_id,
-            event.strip_line1(),
-            event.date,
-            share_token=meta.get("share_token"),
         )
         # Deletion may have been requested while the network upload was active.
         # Delete again after upload so the final cloud state is always empty.
@@ -340,7 +313,6 @@ class UploadQueue:
                 {
                     "r2_target": target,
                     "download_url": download_url,
-                    "share_token": share_token,
                     "upload_status": "complete",
                 },
             )
@@ -348,9 +320,5 @@ class UploadQueue:
 
     def close(self, timeout: float = 10) -> None:
         self._stop_event.set()
-        try:
-            self._queue.put_nowait(None)
-        except queue.Full:
-            pass
         self._thread.join(timeout=timeout)
         self._rescan_thread.join(timeout=timeout)

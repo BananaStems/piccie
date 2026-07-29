@@ -1,4 +1,5 @@
 from io import BytesIO
+import threading
 from unittest.mock import MagicMock
 
 import pytest
@@ -51,3 +52,36 @@ def test_any_picamera_capture_error_forces_supervisor_restart(tmp_path, monkeypa
     finally:
         camera._mode = "mock"
         camera.close()
+
+
+def test_settings_preview_waits_for_a_new_producer_frame():
+    camera = CameraService.__new__(CameraService)
+    camera._frame_lock = threading.Lock()
+    camera._frame_cond = threading.Condition(camera._frame_lock)
+    camera._camera_lock = threading.Lock()
+    camera._viewers = 0
+    camera._frame_seq = 3
+    camera._latest_jpeg = b"old"
+    camera._latest_jpeg_ts = 0.0
+    camera._stop_event = threading.Event()
+    camera._preview_interval = 1 / 15
+    camera._available = True
+
+    producer_started = threading.Event()
+
+    def produce_frame():
+        with camera._frame_cond:
+            camera._frame_cond.wait_for(lambda: camera._viewers == 1, timeout=1)
+            producer_started.set()
+            camera._latest_jpeg = b"fresh"
+            camera._frame_seq += 1
+            camera._frame_cond.notify_all()
+
+    producer = threading.Thread(target=produce_frame)
+    producer.start()
+    assert camera.capture_preview_frame() == b"fresh"
+    producer.join(timeout=1)
+
+    assert producer_started.is_set()
+    assert not producer.is_alive()
+    assert camera._viewers == 0

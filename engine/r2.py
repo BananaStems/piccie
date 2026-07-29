@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import html
-import json
 import logging
 import secrets
 import time
@@ -12,11 +11,11 @@ from pathlib import Path
 import boto3
 from botocore.config import Config
 
+from engine.clock import CLOCK_SYNC_ERROR, wait_for_system_clock
 from engine.config import R2Config
 from engine.paths import (
     r2_event_archive_key,
     r2_event_gallery_key,
-    r2_event_manifest_key,
     r2_event_prefix,
     r2_event_strip_key,
 )
@@ -46,28 +45,37 @@ class R2Uploader:
             ),
         )
 
+    @staticmethod
+    def _raise_clock_skew(exc: Exception) -> None:
+        response = getattr(exc, "response", {})
+        code = (
+            response.get("Error", {}).get("Code", "")
+            if isinstance(response, dict)
+            else ""
+        )
+        if code == "RequestTimeTooSkewed" or "RequestTimeTooSkewed" in str(exc):
+            raise RuntimeError(CLOCK_SYNC_ERROR) from exc
+
+    def _signed_call(self, operation, /, *args, **kwargs):
+        """Gate every AWS-signed operation on a trustworthy system clock."""
+        wait_for_system_clock()
+        try:
+            return operation(*args, **kwargs)
+        except Exception as exc:
+            self._raise_clock_skew(exc)
+            raise
+
     def upload_session(
         self,
         session_dir: Path,
         event_id: str,
         session_id: str,
-        event_name: str,
-        event_date: str,
-        share_token: str | None = None,
-    ) -> tuple[str, str]:
+    ) -> str:
         """Upload a private strip and return a time-limited R2 download URL."""
         strip_local = session_dir / "strip.jpg"
         strip_key = r2_event_strip_key(event_id, session_id)
         self._upload_file(strip_local, strip_key, content_type="image/jpeg")
-
-        token = share_token or self.new_session_share_token(event_id, session_id)
-        self._upload_manifest(event_id, event_name, event_date)
-        url = self.download_url(strip_key)
-        return url, token
-
-    @staticmethod
-    def new_session_share_token(event_id: str, session_id: str) -> str:
-        return f"{event_id}.{session_id}.{secrets.token_urlsafe(32)}"
+        return self.download_url(strip_key)
 
     def publish_event(
         self,
@@ -78,7 +86,6 @@ class R2Uploader:
         previous_token: str | None = None,
     ) -> tuple[str, str]:
         token = f"{event_id}.{secrets.token_urlsafe(32)}"
-        self._upload_manifest(event_id, event_name, event_date)
         self._upload_file(
             archive_path,
             r2_event_archive_key(event_id),
@@ -95,7 +102,8 @@ class R2Uploader:
         return self.download_url(gallery_key), token
 
     def disable_share(self, event_id: str, token: str) -> None:
-        self.client.delete_object(
+        self._signed_call(
+            self.client.delete_object,
             Bucket=self.config.bucket,
             Key=r2_event_gallery_key(event_id, token),
         )
@@ -107,7 +115,8 @@ class R2Uploader:
         if target.startswith("event-content:"):
             event_id = target.split(":", 1)[1]
             self._delete_prefix(f"{r2_event_prefix(event_id)}sessions/")
-            self.client.delete_object(
+            self._signed_call(
+                self.client.delete_object,
                 Bucket=self.config.bucket,
                 Key=r2_event_archive_key(event_id),
             )
@@ -128,10 +137,11 @@ class R2Uploader:
             args = {"Bucket": self.config.bucket, "Prefix": prefix}
             if continuation:
                 args["ContinuationToken"] = continuation
-            response = self.client.list_objects_v2(**args)
+            response = self._signed_call(self.client.list_objects_v2, **args)
             objects = [{"Key": item["Key"]} for item in response.get("Contents", [])]
             if objects:
-                self.client.delete_objects(
+                self._signed_call(
+                    self.client.delete_objects,
                     Bucket=self.config.bucket,
                     Delete={"Objects": objects, "Quiet": True},
                 )
@@ -146,7 +156,8 @@ class R2Uploader:
         key: str,
         content_type: str = "image/jpeg",
     ) -> None:
-        self.client.upload_file(
+        self._signed_call(
+            self.client.upload_file,
             str(path),
             self.config.bucket,
             key,
@@ -154,12 +165,9 @@ class R2Uploader:
         )
         logger.info("Uploaded %s to s3://%s/%s", path.name, self.config.bucket, key)
 
-    def _upload_json(self, payload: dict, key: str) -> None:
-        encoded = json.dumps(payload, separators=(",", ":")).encode("utf-8")
-        self._upload_bytes(encoded, key, content_type="application/json")
-
     def _upload_bytes(self, data: bytes, key: str, *, content_type: str) -> None:
-        self.client.put_object(
+        self._signed_call(
+            self.client.put_object,
             Bucket=self.config.bucket,
             Key=key,
             Body=data,
@@ -167,14 +175,9 @@ class R2Uploader:
         )
         logger.info("Uploaded %s to s3://%s/%s", key.split("/")[-1], self.config.bucket, key)
 
-    def _upload_manifest(self, event_id: str, name: str, date: str) -> None:
-        self._upload_json(
-            {"id": event_id, "name": name, "date": date},
-            r2_event_manifest_key(event_id),
-        )
-
     def download_url(self, key: str) -> str:
-        return self.client.generate_presigned_url(
+        return self._signed_call(
+            self.client.generate_presigned_url,
             "get_object",
             Params={"Bucket": self.config.bucket, "Key": key},
             ExpiresIn=GUEST_LINK_EXPIRY_SECONDS,
@@ -193,7 +196,7 @@ class R2Uploader:
             args = {"Bucket": self.config.bucket, "Prefix": prefix}
             if continuation:
                 args["ContinuationToken"] = continuation
-            response = self.client.list_objects_v2(**args)
+            response = self._signed_call(self.client.list_objects_v2, **args)
             strip_keys.extend(
                 item["Key"]
                 for item in response.get("Contents", [])
@@ -247,6 +250,7 @@ box-shadow:0 8px 30px #47243818}}.strip img{{width:100%;height:auto;border-radiu
         attempts: int = 5,
     ) -> None:
         """Require the signed private R2 URL to return the exact uploaded JPEG."""
+        wait_for_system_clock()
         expected = expected_path.read_bytes()
         last_error: Exception | None = None
         for attempt in range(attempts):

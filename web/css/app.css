@@ -952,6 +952,20 @@ input[type="date"]::-webkit-calendar-picker-indicator {
   max-width: none;
 }
 
+.masked-secret,
+.pin-input {
+  -webkit-text-security: disc;
+}
+
+.masked-secret.is-visible {
+  -webkit-text-security: none;
+}
+
+.pin-input {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.18em;
+}
+
 .form-error {
   min-height: 1.25rem;
   margin: 0;

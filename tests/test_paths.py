@@ -1,7 +1,6 @@
 from engine.paths import (
     r2_event_archive_key,
     r2_event_gallery_key,
-    r2_event_manifest_key,
     r2_event_strip_key,
     r2_session_target,
     slugify,
@@ -18,7 +17,6 @@ def test_private_event_keys():
     session = "22222222-2222-4222-8222-222222222222"
     token = f"{event}.secret"
     assert r2_event_strip_key(event, session) == f"events/{event}/sessions/{session}/strip.jpg"
-    assert r2_event_manifest_key(event) == f"events/{event}/manifest.json"
     assert r2_event_archive_key(event) == f"events/{event}/download-all.zip"
     assert r2_session_target(event, session) == f"event-session:{event}:{session}"
     assert r2_event_gallery_key(event, token).startswith(f"events/{event}/shares/")

@@ -80,7 +80,7 @@ def test_import_refuses_degraded_data_and_keeps_source(tmp_path):
     assert "degraded" in status.read_text()
 
 
-def test_existing_r2_config_is_not_overwritten_but_boot_secret_is_removed(tmp_path):
+def test_valid_boot_file_rotates_existing_r2_credentials(tmp_path):
     source = tmp_path / "piccie-r2.txt"
     destination = tmp_path / "local.json"
     status = tmp_path / "status.txt"
@@ -98,7 +98,7 @@ def test_existing_r2_config_is_not_overwritten_but_boot_secret_is_removed(tmp_pa
         status_path=status,
         degraded_markers=(),
     )
-    assert json.loads(destination.read_text())["r2"]["bucket"] == "existing-bucket"
+    assert json.loads(destination.read_text())["r2"]["bucket"] == "replacement-bucket"
     assert not source.exists()
 
 

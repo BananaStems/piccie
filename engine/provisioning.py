@@ -8,28 +8,29 @@ from pathlib import Path
 from PIL import Image
 
 from engine.atomicio import write_json_atomic, write_text_atomic
+from engine.clock import wait_for_system_clock
 from engine.config import ConfigStore, R2Config
 from engine.r2 import R2Uploader
 
 
 def _r2_probe(config: R2Config) -> None:
     """Upload and download a real strip through a signed private R2 URL."""
+    # Check once before entering the cleanup block. If NTP is not ready there
+    # cannot be probe objects to remove, and a second 30s wait would only delay
+    # the actionable onboarding error.
+    wait_for_system_clock()
     uploader = R2Uploader(config)
     event_id = str(uuid.uuid4())
     session_id = str(uuid.uuid4())
-    token = uploader.new_session_share_token(event_id, session_id)
     try:
         with tempfile.TemporaryDirectory(prefix="piccie-r2-probe-") as directory:
             session_dir = Path(directory)
             strip = session_dir / "strip.jpg"
             Image.new("RGB", (2, 2), "#f5a3c7").save(strip, "JPEG")
-            guest_url, _ = uploader.upload_session(
+            guest_url = uploader.upload_session(
                 session_dir,
                 event_id,
                 session_id,
-                "Piccie readiness check",
-                "2000-01-01",
-                share_token=token,
             )
             uploader.verify_guest_download(guest_url, strip)
     finally:
@@ -50,12 +51,10 @@ def provision_booth(
     store: ConfigStore,
 ) -> None:
     """Validate storage and persist first-boot configuration."""
-    r2 = store.r2_from_local()
-    if not r2:
+    if not store.r2_from_local():
         raise ValueError(
             "R2 settings were not imported. Complete piccie-r2.txt on the microSD card."
         )
-    _r2_probe(r2)
     local_config = data_dir / "local.json"
     local = store.load_local_file() or {}
     local["wifi_ssid"] = payload["wifi_ssid"]
@@ -84,6 +83,3 @@ def provision_booth(
         "r2_configured=true\n",
     )
     marker.chmod(0o600)
-    lockdown_request = data_dir / ".lockdown-requested"
-    write_text_atomic(lockdown_request, "provisioning complete\n")
-    lockdown_request.chmod(0o600)

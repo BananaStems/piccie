@@ -1,0 +1,7 @@
+[Unit]
+Description=Delayed safe Piccie shutdown
+
+[Timer]
+OnActiveSec=3s
+AccuracySec=1s
+Unit=piccie-poweroff.service

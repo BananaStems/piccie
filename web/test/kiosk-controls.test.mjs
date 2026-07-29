@@ -10,7 +10,12 @@ async function importBrowserModule(relativePath) {
 
 const cornerTap = await importBrowserModule("../js/corner-tap.js");
 const osk = await importBrowserModule("../js/osk.js");
+const appSource = await readFile(new URL("../js/app.js", import.meta.url), "utf8");
 const onboardingSource = await readFile(new URL("../js/screens/onboarding.js", import.meta.url), "utf8");
+const settings = await importBrowserModule("../js/screens/settings.js");
+const settingsSource = await readFile(new URL("../js/screens/settings.js", import.meta.url), "utf8");
+const wifiSource = await readFile(new URL("../js/screens/wifi.js", import.meta.url), "utf8");
+const cssSource = await readFile(new URL("../css/app.css", import.meta.url), "utf8");
 
 test("five-tap party exit never deactivates without operator unlock", async () => {
   const actions = [];
@@ -54,8 +59,73 @@ test("Wi-Fi keyboard fields snap to the visible bottom edge", () => {
   assert.equal(osk.scrollBlockForInput(regularInput), "center");
 });
 
+test("operator PIN uses a digits-only keypad and strips physical non-digits", () => {
+  const pinInput = {
+    dataset: { oskLayout: "pin" },
+    type: "text",
+    inputMode: "numeric",
+    classList: { contains: () => false },
+  };
+  const keys = osk.rowsForLayout(osk.layoutForInput(pinInput)).flat();
+
+  assert.deepEqual(keys, [
+    "1", "2", "3",
+    "4", "5", "6",
+    "7", "8", "9",
+    "backspace", "0", "done",
+  ]);
+  assert.equal(osk.normalizePinValue("12a-34 56", 6), "123456");
+});
+
+test("kiosk secrets are masked without native password fields", () => {
+  const kioskSource = `${appSource}\n${onboardingSource}\n${wifiSource}`;
+
+  assert.doesNotMatch(kioskSource, /type=["']password["']/);
+  assert.match(onboardingSource, /name="operator_code"[^>]+data-osk-layout="pin"/);
+  assert.match(appSource, /data-osk-layout="pin"/);
+  assert.match(cssSource, /\.pin-input\s*\{[^}]*letter-spacing:/s);
+  assert.match(cssSource, /\.masked-secret,\s*\.pin-input\s*\{[^}]*-webkit-text-security:\s*disc/s);
+});
+
 test("first-boot setup uses the SD-card R2 file and has no phone pairing flow", () => {
   assert.match(onboardingSource, /piccie-r2\.txt/);
   assert.match(onboardingSource, /r2_configured/);
   assert.doesNotMatch(onboardingSource, /pairOnboarding|onboarding-pair-qr|Continue on your phone/);
+});
+
+test("finishing setup opens the menu without a lockdown reboot", () => {
+  assert.match(onboardingSource, /await api\.completeOnboarding[\s\S]+window\.location\.reload\(\)/);
+  assert.doesNotMatch(onboardingSource, /Securing your booth|Restarting…|onboardingRestartPolling/);
+});
+
+test("performance restart must go offline before it is considered complete", async () => {
+  const statuses = ["online", "online", "offline", "offline", "online"];
+  let checks = 0;
+
+  await settings.waitForRestartCycle({
+    checkStatus: async () => {
+      const status = statuses[checks];
+      checks += 1;
+      if (status === "offline") throw new Error("offline");
+    },
+    wait: async () => {},
+  });
+
+  assert.equal(checks, 5);
+});
+
+test("performance restart reports when no restart begins", async () => {
+  await assert.rejects(
+    settings.waitForRestartCycle({
+      checkStatus: async () => {},
+      wait: async () => {},
+      startChecks: 2,
+    }),
+    /did not begin restarting/,
+  );
+});
+
+test("settings preview is paced by fresh backend frames at the appliance rate", () => {
+  assert.match(settingsSource, /setTimeout\(poll, 20\)/);
+  assert.doesNotMatch(settingsSource, /setTimeout\(poll, 160\)/);
 });

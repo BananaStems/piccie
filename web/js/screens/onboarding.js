@@ -41,9 +41,9 @@ export function renderOnboardingScreen({ app, state, render, api, escapeHtml, lo
               autocomplete="off" placeholder="Hidden network name" hidden />
           </div>
           <div class="password-field" id="onboarding-password-field">
-            <input class="wifi-keyboard-anchor wifi-password-anchor" id="onboarding-wifi-password"
-              type="password" inputmode="none"
-              autocomplete="off" placeholder="Wi-Fi password" aria-label="Wi-Fi password" />
+            <input class="wifi-keyboard-anchor wifi-password-anchor masked-secret" id="onboarding-wifi-password"
+              type="text" inputmode="none" autocomplete="off" autocapitalize="none" spellcheck="false"
+              data-1p-ignore="true" data-lpignore="true" placeholder="Wi-Fi password" aria-label="Wi-Fi password" />
             <button class="btn btn-secondary password-toggle" type="button" id="onboarding-password-toggle">Show</button>
           </div>
           <p class="wifi-msg onboarding-wifi-message" id="onboarding-wifi-message"
@@ -94,7 +94,7 @@ export function renderOnboardingScreen({ app, state, render, api, escapeHtml, lo
       document.getElementById("onboarding-wifi-message").textContent = "";
       const password = document.getElementById("onboarding-wifi-password");
       password.value = "";
-      password.type = "password";
+      password.classList.remove("is-visible");
       document.getElementById("onboarding-password-field").hidden = network.connected;
       document.getElementById("onboarding-password-toggle").textContent = "Show";
       document.getElementById("onboarding-wifi-connect").textContent = network.connected ? "Continue" : "Connect";
@@ -114,9 +114,8 @@ export function renderOnboardingScreen({ app, state, render, api, escapeHtml, lo
     const toggle = document.getElementById("onboarding-password-toggle");
     toggle.onpointerdown = (event) => event.preventDefault();
     toggle.onclick = () => {
-      const visible = password.type === "text";
-      password.type = visible ? "password" : "text";
-      toggle.textContent = visible ? "Show" : "Hide";
+      const visible = password.classList.toggle("is-visible");
+      toggle.textContent = visible ? "Hide" : "Show";
     };
     document.getElementById("onboarding-wifi-connect").onclick = async () => {
       if (!state.wifiSelected && !state.wifiHidden) return;
@@ -219,8 +218,8 @@ export function renderOnboardingScreen({ app, state, render, api, escapeHtml, lo
       "finish",
       "Finish setup",
       "Choose the PIN used to open settings.",
-      `<form class="onboarding-fields onboarding-finish-fields" id="onboarding-finish-form">
-          <label class="field-wide">Operator PIN<input name="admin_pin" type="password" inputmode="numeric" pattern="[0-9]{4,8}" minlength="4" maxlength="8" autocomplete="new-password" required /><small>Use 4–8 digits.</small></label>
+      `<form class="onboarding-fields onboarding-finish-fields" id="onboarding-finish-form" autocomplete="off">
+          <label class="field-wide">Operator PIN<input class="pin-input" name="operator_code" type="text" inputmode="numeric" data-osk-layout="pin" pattern="[0-9]{4,8}" minlength="4" maxlength="8" autocomplete="off" autocapitalize="none" spellcheck="false" data-1p-ignore="true" data-lpignore="true" required /><small>Use 4–8 digits.</small></label>
           <label class="field-wide">SSH public key <span class="field-optional">Optional</span><textarea name="ssh_authorized_key" rows="2" maxlength="1000" autocomplete="off" placeholder="ssh-ed25519 …"></textarea><small>Allows secure remote updates from your computer.</small></label>
           <p class="onboarding-submit-message field-wide" id="onboarding-submit-message" role="status"></p>
         </form>`,
@@ -234,7 +233,7 @@ export function renderOnboardingScreen({ app, state, render, api, escapeHtml, lo
     document.getElementById("onboarding-finish-form").onsubmit = async (event) => {
       event.preventDefault();
       const data = new FormData(event.currentTarget);
-      const pin = data.get("admin_pin");
+      const pin = data.get("operator_code");
       const button = document.getElementById("onboarding-finish-button");
       const message = document.getElementById("onboarding-submit-message");
       button.disabled = true;
@@ -245,8 +244,7 @@ export function renderOnboardingScreen({ app, state, render, api, escapeHtml, lo
           admin_pin: pin,
           ssh_authorized_key: data.get("ssh_authorized_key"),
         });
-        state.onboardingStep = "restart";
-        render();
+        window.location.reload();
       } catch (error) {
         message.className = "onboarding-submit-message field-wide error-text";
         message.textContent = error.message;
@@ -255,42 +253,9 @@ export function renderOnboardingScreen({ app, state, render, api, escapeHtml, lo
     };
   };
 
-  const showRestart = () => {
-    shell(
-      "booth",
-      "Securing your booth",
-      "Piccie is restarting once to protect the operating system. Keep the power connected.",
-      `<div class="centered"><div class="spinner"></div><p class="onboarding-submit-message">Restarting…</p></div>`,
-    );
-    if (state.onboardingRestartPolling) return;
-    state.onboardingRestartPolling = true;
-    (async () => {
-      let sawRestart = false;
-      for (let attempt = 0; attempt < 90; attempt += 1) {
-        await new Promise((resolve) => setTimeout(resolve, 2000));
-        try {
-          const latest = await api.status();
-          if ((sawRestart || attempt >= 10) && !latest.onboarding_required) {
-            window.location.reload();
-            return;
-          }
-        } catch {
-          sawRestart = true;
-        }
-      }
-      const message = document.querySelector(".onboarding-submit-message");
-      if (message) {
-        message.className = "onboarding-submit-message error-text";
-        message.textContent = "The restart is taking longer than expected. Keep power connected; Piccie will recover automatically.";
-      }
-      state.onboardingRestartPolling = false;
-    })();
-  };
-
   ({
     wifi: showWifi,
     storage: showStorage,
     finish: showFinish,
-    restart: showRestart,
   }[state.onboardingStep] || showWifi)();
 }

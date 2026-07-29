@@ -27,10 +27,20 @@ python3 -m venv --system-site-packages "${INSTALL_DIR}/venv"
 install -m 644 "${INSTALL_DIR}/image/piccie-engine.service" /etc/systemd/system/
 install -m 755 "${INSTALL_DIR}/image/kiosk-launch.sh" /usr/local/bin/piccie-kiosk
 install -m 755 "${INSTALL_DIR}/image/piccie-update.sh" /usr/local/sbin/piccie-update
+install -m 755 "${INSTALL_DIR}/image/piccie-restart-engine" /usr/local/sbin/piccie-restart-engine
+install -m 440 "${INSTALL_DIR}/image/files/piccie-restart-engine-sudoers" /etc/sudoers.d/piccie-restart-engine
+visudo -cf /etc/sudoers.d/piccie-restart-engine >/dev/null
 install -m 755 "${INSTALL_DIR}/image/piccie-performance" /usr/local/sbin/piccie-performance
 install -m 440 "${INSTALL_DIR}/image/files/piccie-performance-sudoers" /etc/sudoers.d/piccie-performance
 visudo -cf /etc/sudoers.d/piccie-performance >/dev/null
+install -m 644 "${INSTALL_DIR}/image/piccie-performance-reboot.service" /etc/systemd/system/
+install -m 644 "${INSTALL_DIR}/image/piccie-performance-reboot.timer" /etc/systemd/system/
+install -m 755 "${INSTALL_DIR}/image/piccie-clock-sync" /usr/local/sbin/piccie-clock-sync
+install -m 440 "${INSTALL_DIR}/image/files/piccie-clock-sudoers" /etc/sudoers.d/piccie-clock
+visudo -cf /etc/sudoers.d/piccie-clock >/dev/null
 install -m 755 "${INSTALL_DIR}/image/piccie-shutdown" /usr/local/sbin/piccie-shutdown
+install -m 644 "${INSTALL_DIR}/image/piccie-poweroff.service" /etc/systemd/system/
+install -m 644 "${INSTALL_DIR}/image/piccie-poweroff.timer" /etc/systemd/system/
 install -m 440 "${INSTALL_DIR}/image/files/piccie-shutdown-sudoers" /etc/sudoers.d/piccie-shutdown
 visudo -cf /etc/sudoers.d/piccie-shutdown >/dev/null
 install -m 644 "${INSTALL_DIR}/image/piccie-bootdiag.service" /etc/systemd/system/
@@ -43,14 +53,14 @@ if [[ -d /boot/firmware && ! -e /boot/firmware/piccie-r2.txt ]]; then
   install -m 644 "${INSTALL_DIR}/image/files/piccie-r2.txt" /boot/firmware/piccie-r2.txt
 fi
 
-# Watertight (read-only root + writable /data) units + scripts.
+# Watertight read-only root + writable /data units and scripts. Root protection
+# is baked into cmdline/fstab; the verifier never rewrites live boot files.
 install -m 755 "${INSTALL_DIR}/image/piccie-grow-data.sh" /usr/local/sbin/piccie-grow-data
 install -m 755 "${INSTALL_DIR}/image/piccie-firstboot-datapart.sh" /usr/local/bin/piccie-firstboot-datapart
 install -m 755 "${INSTALL_DIR}/image/piccie-lockdown.sh" /usr/local/bin/piccie-lockdown
 install -m 644 "${INSTALL_DIR}/image/piccie-grow-data.service" /etc/systemd/system/
 install -m 644 "${INSTALL_DIR}/image/piccie-firstboot-datapart.service" /etc/systemd/system/
 install -m 644 "${INSTALL_DIR}/image/piccie-lockdown.service" /etc/systemd/system/
-install -m 644 "${INSTALL_DIR}/image/piccie-lockdown.path" /etc/systemd/system/
 install -m 644 "${INSTALL_DIR}/image/data-fallback.service" /etc/systemd/system/
 
 if id pi &>/dev/null; then
@@ -89,10 +99,13 @@ fi
 # its failing network stage stalls boot for minutes. Mask it.
 systemctl mask cloud-init.service cloud-init-local.service cloud-init-main.service \
   cloud-init-network.service cloud-config.service cloud-final.service 2>/dev/null || true
+# Root is mounted ro by the kernel and enforced by piccie-lockdown. Avoid a
+# second distro-owned remount path during early boot.
+systemctl mask systemd-remount-fs.service
 
 systemctl daemon-reload
 systemctl enable piccie-grow-data piccie-firstboot-datapart \
-  piccie-lockdown piccie-lockdown.path data-fallback piccie-engine \
+  piccie-lockdown data-fallback piccie-engine \
   piccie-bootdiag
 
 echo "Piccie appliance setup complete."

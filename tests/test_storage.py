@@ -1,4 +1,5 @@
 import os
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -37,7 +38,7 @@ def test_create_event_and_session(storage):
     assert event.photo_count == 0
     session = storage.create_session(event.id)
     assert Path(session.local_path).exists()
-    storage.increment_event_photo_count(event.id)
+    storage.mark_session_finalized(session.id)
     updated = storage.get_event(event.id)
     assert updated.photo_count == 1
 
@@ -128,7 +129,7 @@ def test_clear_event_photos(storage):
     session = storage.create_session(event.id)
     session_dir = Path(session.local_path)
     (session_dir / "strip.jpg").write_bytes(b"fake")
-    storage.increment_event_photo_count(event.id)
+    storage.mark_session_finalized(session.id)
     ok, basenames = storage.clear_event_photos(event.id)
     assert ok is True
     assert basenames == [f"event-content:{event.id}"]
@@ -208,6 +209,55 @@ def test_valid_strip_resumes_without_source_photos(storage):
     Image.new("RGB", (2, 2)).save(Path(session.local_path) / "strip.jpg")
 
     assert [item.id for item in storage.list_sessions_needing_upload()] == [session.id]
+
+
+def test_orphan_photo_tree_is_quarantined_not_deleted(storage):
+    orphan = storage.events_dir / "missing-database-event"
+    orphan.mkdir()
+    photo = orphan / "strip.jpg"
+    photo.write_bytes(b"guest photo")
+
+    assert storage.sweep_orphan_dirs() == 1
+
+    recovered = storage.events_dir.parent / "recovered-orphans" / orphan.name
+    assert (recovered / "strip.jpg").read_bytes() == b"guest photo"
+    assert not orphan.exists()
+
+
+def test_finalized_strip_reconciliation_repairs_count_exactly_once(storage):
+    event = storage.create_event("Wedding", "2026-06-14", "classic")
+    session = storage.create_session(event.id)
+    Image.new("RGB", (2, 2)).save(Path(session.local_path) / "strip.jpg")
+
+    assert storage.reconcile_finalized_sessions() == 1
+    assert storage.get_event(event.id).photo_count == 1
+    assert storage.get_session(session.id).finalized_at is not None
+
+    storage.reconcile_finalized_sessions()
+    storage.mark_session_finalized(session.id)
+    assert storage.get_event(event.id).photo_count == 1
+
+
+def test_failed_upload_uses_persistent_exponential_backoff(storage):
+    event = storage.create_event("Wedding", "2026-06-14", "classic")
+    session = storage.create_session(event.id)
+    Image.new("RGB", (2, 2)).save(Path(session.local_path) / "strip.jpg")
+    storage.update_session_upload(
+        session.id,
+        "failed",
+        error="offline",
+        increment_attempt=True,
+    )
+    failed = storage.get_session(session.id)
+    updated = datetime.fromisoformat(failed.upload_updated_at)
+
+    assert storage.list_sessions_needing_upload(now=updated) == []
+    assert [
+        item.id
+        for item in storage.list_sessions_needing_upload(
+            now=updated + timedelta(seconds=31)
+        )
+    ] == [session.id]
 
 
 def test_upload_summary_is_database_backed(storage):

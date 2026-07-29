@@ -55,7 +55,7 @@ tar -C "${STAGE}" -czf "${ARCHIVE}" .
 ssh "${SSH_ARGS[@]}" "${HOST}" 'mkdir -p /data/app/incoming'
 REMOTE="/data/app/incoming/${RELEASE_ID}.tar.gz"
 scp "${SSH_ARGS[@]}" "${ARCHIVE}" "${HOST}:${REMOTE}"
-ssh "${SSH_ARGS[@]}" "${HOST}" "sudo -n /usr/local/sbin/piccie-update '${REMOTE}'"
+ssh "${SSH_ARGS[@]}" "${HOST}" "/usr/local/sbin/piccie-update '${REMOTE}'"
 # v1.0.3's installed updater restarts the engine but not the already-open
 # browser. Force one clean kiosk relaunch so the newly deployed UI appears
 # immediately; openbox starts it again after the engine health check above.

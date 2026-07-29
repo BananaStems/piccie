@@ -1,10 +1,19 @@
 #!/usr/bin/env bash
-# Apply Piccie's fixed, device-specific performance profile and reboot.
+# Apply Piccie's fixed, device-specific performance profile and schedule reboot.
 set -euo pipefail
 
 DEVICE="${1:-}"
 MODE="${2:-}"
-CONFIG=/boot/firmware/config.txt
+if [[ "${BASH_SOURCE[0]}" == "/usr/local/sbin/piccie-performance" ]]; then
+  CONFIG=/boot/firmware/config.txt
+  MODEL_FILE=/proc/device-tree/model
+  SYSTEMCTL=/usr/bin/systemctl
+else
+  CONFIG="${PICCIE_BOOT_CONFIG:-/boot/firmware/config.txt}"
+  MODEL_FILE="${PICCIE_MODEL_FILE:-/proc/device-tree/model}"
+  SYSTEMCTL="${PICCIE_SYSTEMCTL:-/usr/bin/systemctl}"
+fi
+REBOOT_UNIT=piccie-performance-reboot
 BEGIN="# BEGIN PICCIE PERFORMANCE"
 END="# END PICCIE PERFORMANCE"
 
@@ -12,7 +21,7 @@ END="# END PICCIE PERFORMANCE"
 [[ "${MODE}" == "standard" || "${MODE}" == "performance" ]] || { echo "unsupported mode" >&2; exit 2; }
 [[ -f "${CONFIG}" ]] || { echo "boot configuration not found" >&2; exit 3; }
 
-MODEL="$(tr -d '\0' </proc/device-tree/model 2>/dev/null || true)"
+MODEL="$(tr -d '\0' <"${MODEL_FILE}" 2>/dev/null || true)"
 case "${DEVICE}:${MODEL}" in
   pi4:*"Raspberry Pi 4 Model B"*) ;;
   pi5:*"Raspberry Pi 5"*) ;;
@@ -46,5 +55,14 @@ fi
 
 cp -n -- "${CONFIG}" "${CONFIG}.piccie-original" || true
 cat "${TMP}" >"${CONFIG}"
+rm -f -- "${TMP}"
+trap - EXIT
 sync "${CONFIG}"
-systemd-run --quiet --on-active=3s /usr/bin/systemctl reboot
+
+# Restart a preinstalled timer and verify it is active. This leaves enough time
+# for the API to save the selected mode and send its response before rebooting.
+"${SYSTEMCTL}" stop "${REBOOT_UNIT}.timer" >/dev/null 2>&1 || true
+"${SYSTEMCTL}" reset-failed "${REBOOT_UNIT}.service" >/dev/null 2>&1 || true
+"${SYSTEMCTL}" start "${REBOOT_UNIT}.timer"
+"${SYSTEMCTL}" is-active --quiet "${REBOOT_UNIT}.timer" \
+  || { echo "reboot timer did not become active" >&2; exit 6; }

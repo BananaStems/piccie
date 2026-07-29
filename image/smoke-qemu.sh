@@ -8,6 +8,7 @@ KEEP_RUNNING=0
 SKIP_BOOT=0
 LOG=""
 REBOOT_RESTARTED=0
+HTTP_PORT="${PICCIE_QEMU_HTTP_PORT:-18080}"
 
 cleanup() {
   if [[ -n "${LOG}" && -f "${LOG}" ]]; then
@@ -27,8 +28,8 @@ for arg in "$@"; do
 Usage: ./image/smoke-qemu.sh [--keep-running] [--skip-boot]
 
 Boots a fresh copy of the Piccie image with 256 MiB of extra virtual-card space.
-Passes after p3/ext4 growth, the controlled reboot, and systemd startup.
-Does not wait for SSH or the booth API (too slow/unreliable on Mac TCG).
+Passes after p3/ext4 growth, the controlled reboot, systemd startup, and a
+successful response from the real engine health endpoint.
 
   --keep-running  Leave QEMU running after a successful boot check
   --skip-boot       Check an already-running QEMU VM (reads its serial log only if found)
@@ -36,6 +37,7 @@ Does not wait for SSH or the booth API (too slow/unreliable on Mac TCG).
 Env:
   PICCIE_QEMU_TIMEOUT      Seconds to wait for boot (default: 1200)
   PICCIE_QEMU_EXTRA_SIZE   Extra virtual-card bytes (default: 256 MiB)
+  PICCIE_QEMU_HTTP_PORT    Host health-check port (default: 18080)
 EOF
       exit 0
       ;;
@@ -50,7 +52,8 @@ trap cleanup EXIT
 
 boot_ok() {
   grep -qE "piccie-grow-data: (filesystem expansion verified|partition and ext4 filesystem already use the full device)" "${LOG}" 2>/dev/null \
-    && grep -q "Reached target multi-user.target" "${LOG}" 2>/dev/null
+    && grep -q "Reached target multi-user.target" "${LOG}" 2>/dev/null \
+    && curl -fsS --max-time 3 "http://127.0.0.1:${HTTP_PORT}/healthz" >/dev/null
 }
 
 boot_failed() {
@@ -66,7 +69,7 @@ reboot_loop() {
 
 restart_after_qemu_reboot() {
   [[ "${REBOOT_RESTARTED}" -eq 0 ]] \
-    && grep -q "Reboot failed -- System halted" "${LOG}" 2>/dev/null
+    && grep -qE "Reboot failed -- System halted|reboot: Restarting system" "${LOG}" 2>/dev/null
 }
 
 if [[ "${SKIP_BOOT}" -eq 0 ]]; then
@@ -77,6 +80,7 @@ if [[ "${SKIP_BOOT}" -eq 0 ]]; then
   PICCIE_QEMU_FRESH="${PICCIE_QEMU_FRESH:-1}" \
     PICCIE_QEMU_REUSE_IMAGE="${PICCIE_QEMU_REUSE_IMAGE:-0}" \
     PICCIE_QEMU_EXTRA_SIZE="${PICCIE_QEMU_EXTRA_SIZE:-268435456}" \
+    PICCIE_QEMU_HTTP_PORT="${HTTP_PORT}" \
     PICCIE_QEMU_HEADLESS=1 PICCIE_QEMU_BACKGROUND=1 \
     "${REPO_ROOT}/image/run-qemu.sh" >"${LOG}" 2>&1 &
 else
@@ -106,13 +110,14 @@ while (( SECONDS < deadline )); do
       pkill -f "qemu-system-aarch64.*piccie-qemu" 2>/dev/null || true
       PICCIE_QEMU_FRESH=0 PICCIE_QEMU_REUSE_IMAGE=1 \
         PICCIE_QEMU_EXTRA_SIZE="${PICCIE_QEMU_EXTRA_SIZE:-268435456}" \
+        PICCIE_QEMU_HTTP_PORT="${HTTP_PORT}" \
         PICCIE_QEMU_HEADLESS=1 PICCIE_QEMU_BACKGROUND=1 \
         "${REPO_ROOT}/image/run-qemu.sh" >>"${LOG}" 2>&1 &
       REBOOT_RESTARTED=1
     fi
     if boot_ok; then
       echo ""
-      echo "Boot check passed — systemd started on Piccie."
+      echo "Boot check passed — data grew and the Piccie engine answered."
       if [[ "${KEEP_RUNNING}" -eq 1 ]]; then
         trap - EXIT
         echo "QEMU left running. Stop with: pkill -f 'qemu-system-aarch64.*piccie-qemu'"

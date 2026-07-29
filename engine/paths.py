@@ -21,10 +21,6 @@ def r2_event_strip_key(event_id: str, session_id: str) -> str:
     return f"{r2_event_prefix(event_id)}sessions/{session_id}/strip.jpg"
 
 
-def r2_event_manifest_key(event_id: str) -> str:
-    return f"{r2_event_prefix(event_id)}manifest.json"
-
-
 def r2_event_archive_key(event_id: str) -> str:
     return f"{r2_event_prefix(event_id)}download-all.zip"
 

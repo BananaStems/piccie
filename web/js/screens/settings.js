@@ -11,6 +11,34 @@ let pendingPatch = {};
 let settingsTimer = null;
 let lastInteraction = 0;
 
+export async function waitForRestartCycle({
+  checkStatus,
+  wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
+  startChecks = 25,
+  returnChecks = 90,
+}) {
+  // A successful status response only proves Piccie is still online. Require an
+  // observed outage before treating a later response as a completed restart.
+  for (let attempt = 0; attempt < startChecks; attempt += 1) {
+    await wait(1000);
+    try {
+      await checkStatus();
+    } catch (_) {
+      for (let returnAttempt = 0; returnAttempt < returnChecks; returnAttempt += 1) {
+        await wait(2000);
+        try {
+          await checkStatus();
+          return;
+        } catch (_) {
+          // Expected while Linux, the engine and Wi-Fi are coming back.
+        }
+      }
+      throw new Error("Piccie did not come back online after restarting.");
+    }
+  }
+  throw new Error("Piccie did not begin restarting. The performance setting was not applied.");
+}
+
 function titleCaseOption(value) {
   return String(value).replace(/_/g, " ").replace(/\b\w/g, (character) => character.toUpperCase());
 }
@@ -93,7 +121,9 @@ function startPreview() {
           // A transient sizing race is harmless; the next poll redraws.
         }
       }
-      setTimeout(poll, 160);
+      // The request long-polls for one newly produced frame, so the backend's
+      // FPS clock provides pacing. Keep only a small decode/paint breather.
+      setTimeout(poll, 20);
     };
     next.onerror = () => {
       if (document.getElementById("settings-preview") === canvas) setTimeout(poll, 500);
@@ -347,14 +377,18 @@ export async function renderSettingsScreen({ app, state, render, api, escapeHtml
           warning_acknowledged: enabling && acknowledge.checked,
         });
         app.innerHTML = `<div class="screen centered restart-screen"><div class="spinner"></div><h2>Restarting Piccie</h2><p>This can take a minute.</p></div>`;
-        setTimeout(async function waitForPiccie() {
-          try {
-            await api.status();
-            location.reload();
-          } catch (_) {
-            setTimeout(waitForPiccie, 2000);
-          }
-        }, 8000);
+        try {
+          await waitForRestartCycle({ checkStatus: () => api.status() });
+          location.reload();
+        } catch (error) {
+          app.innerHTML = `
+            <div class="screen centered restart-screen">
+              <h2>Restart unsuccessful</h2>
+              <p class="error-text">${escapeHtml(error.message)}</p>
+              <button class="btn btn-primary" id="restart-return" type="button">Return to settings</button>
+            </div>`;
+          document.getElementById("restart-return").onclick = () => render();
+        }
       } catch (error) {
         status.textContent = error.message;
         status.classList.add("error-text");

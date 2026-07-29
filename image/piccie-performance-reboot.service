@@ -1,0 +1,6 @@
+[Unit]
+Description=Restart Piccie after applying a performance profile
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/systemctl --no-block reboot

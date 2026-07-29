@@ -13,6 +13,7 @@ logger = logging.getLogger(__name__)
 # wedge, JS fatal — all render as a blank/white screen that never recovers in
 # Chromium --app kiosk mode, and none of them are detectable from outside).
 STALE_AFTER_SECONDS = 45
+STARTUP_GRACE_SECONDS = 120
 CHECK_INTERVAL_SECONDS = 10
 # Cooldown so a fast crash loop can't pkill Chromium continuously.
 MIN_RESTART_GAP_SECONDS = 60
@@ -23,14 +24,15 @@ class KioskWatchdog:
 
     Only armed when PICCIE_KIOSK_WATCHDOG=1 (set by the appliance's systemd
     unit) so a dev browser on the Mac is never killed. Requires at least one
-    heartbeat before it will ever act — a booth deliberately running without
-    the kiosk is left alone. The engine and Chromium both run as user pi, so a
-    plain pkill works; the openbox autostart loop relaunches the kiosk.
+    heartbeat is not required: a fatal error before the first page load is also
+    recovered after a startup grace period. The engine and Chromium both run as
+    user pi, so a plain pkill works; openbox relaunches the kiosk.
     """
 
     def __init__(self) -> None:
         self._enabled = os.environ.get("PICCIE_KIOSK_WATCHDOG", "0") == "1"
         self._last_beat: float | None = None
+        self._armed_at = time.monotonic()
         self._last_restart = 0.0
         self._lock = threading.Lock()
         if self._enabled:
@@ -40,6 +42,12 @@ class KioskWatchdog:
     def beat(self) -> None:
         with self._lock:
             self._last_beat = time.monotonic()
+
+    @property
+    def heartbeat_age(self) -> float | None:
+        with self._lock:
+            last = self._last_beat
+        return None if last is None else max(0.0, time.monotonic() - last)
 
     def _loop(self) -> None:
         while True:
@@ -52,14 +60,17 @@ class KioskWatchdog:
     def _check(self) -> None:
         with self._lock:
             last = self._last_beat
-        if last is None:
-            return  # kiosk never connected; nothing to guard
-        silent = time.monotonic() - last
-        if silent < STALE_AFTER_SECONDS:
+            armed_at = self._armed_at
+        now = time.monotonic()
+        silent = now - (last if last is not None else armed_at)
+        allowed_silence = (
+            STALE_AFTER_SECONDS if last is not None else STARTUP_GRACE_SECONDS
+        )
+        if silent < allowed_silence:
             return
-        if time.monotonic() - self._last_restart < MIN_RESTART_GAP_SECONDS:
+        if now - self._last_restart < MIN_RESTART_GAP_SECONDS:
             return
-        self._last_restart = time.monotonic()
+        self._last_restart = now
         logger.error(
             "kiosk heartbeat silent for %.0fs — restarting Chromium (frontend dead)",
             silent,
@@ -70,3 +81,4 @@ class KioskWatchdog:
         # Reset so we wait for the relaunched kiosk's first beat before guarding again.
         with self._lock:
             self._last_beat = None
+            self._armed_at = now

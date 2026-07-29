@@ -60,7 +60,7 @@ export function renderWifiScreen({ app, state, api, escapeHtml, closeOnScreenKey
     message.className = "wifi-msg";
     const password = document.getElementById("wifi-pw");
     password.value = "";
-    password.type = "password";
+    password.classList.remove("is-visible");
     document.getElementById("wifi-pw-toggle").textContent = "Show";
     document.getElementById("wifi-connect-btn").disabled = false;
     panel.hidden = false;
@@ -115,8 +115,9 @@ export function renderWifiScreen({ app, state, api, escapeHtml, closeOnScreenKey
               inputmode="none" autocomplete="off" placeholder="Hidden network name" hidden />
           </label>
           <div class="password-field">
-            <input class="wifi-keyboard-anchor wifi-password-anchor" id="wifi-pw" type="password"
-              inputmode="none" autocomplete="off" />
+            <input class="wifi-keyboard-anchor wifi-password-anchor masked-secret" id="wifi-pw" type="text"
+              inputmode="none" autocomplete="off" autocapitalize="none" spellcheck="false"
+              data-1p-ignore="true" data-lpignore="true" />
             <button class="btn btn-secondary password-toggle" type="button" id="wifi-pw-toggle">Show</button>
           </div>
         </div>
@@ -143,9 +144,8 @@ export function renderWifiScreen({ app, state, api, escapeHtml, closeOnScreenKey
   const toggle = document.getElementById("wifi-pw-toggle");
   toggle.onpointerdown = (event) => event.preventDefault();
   toggle.onclick = () => {
-    const visible = password.type === "text";
-    password.type = visible ? "password" : "text";
-    toggle.textContent = visible ? "Show" : "Hide";
+    const visible = password.classList.toggle("is-visible");
+    toggle.textContent = visible ? "Hide" : "Show";
   };
   loadNetworks();
 }

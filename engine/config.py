@@ -152,7 +152,18 @@ class ConfigStore:
     def load_local_file(self) -> dict[str, Any] | None:
         if not LOCAL_CONFIG_PATH.exists():
             return None
-        return json.loads(LOCAL_CONFIG_PATH.read_text())
+        try:
+            value = json.loads(LOCAL_CONFIG_PATH.read_text())
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            _log.error(
+                "local.json unreadable (%s); cloud delivery is disabled until it is repaired",
+                type(exc).__name__,
+            )
+            return None
+        if not isinstance(value, dict):
+            _log.error("local.json must contain a JSON object; cloud delivery is disabled")
+            return None
+        return value
 
     def r2_from_local(self) -> R2Config | None:
         local = self.load_local_file()

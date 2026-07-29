@@ -118,13 +118,19 @@ def _complete_onboarding(request: Request, body: OnboardingCompleteRequest) -> d
                 "R2 settings were not found. Shut down Piccie and complete "
                 "piccie-r2.txt on the microSD boot partition.",
             )
+        check_cloud = getattr(request.app.state.upload_queue, "check_cloud_health", None)
+        reachable, cloud_error = (
+            check_cloud() if check_cloud else (False, "Cloud readiness check unavailable.")
+        )
+        if not reachable:
+            raise HTTPException(400, cloud_error or "Could not connect to R2.")
         payload = body.model_dump(mode="json")
         payload["wifi_ssid"] = ssid
         try:
             provision_booth(payload, data_dir=data_dir, store=store)
         except Exception as exc:
             raise HTTPException(400, str(exc) or "Could not connect to R2.") from exc
-    return {"ok": True, "restarting": True}
+    return {"ok": True, "restarting": False}
 
 
 @router.get("/status", response_model=StatusResponse)
@@ -209,8 +215,13 @@ def wifi_connect(request: Request, body: WifiConnectRequest) -> dict:
     config.wifi_ssid = result.ssid
     store.save(config)
     check_cloud = getattr(request.app.state.upload_queue, "check_cloud_health", None)
+    onboarding_will_probe = (
+        os.environ.get("PICCIE_ONBOARDING") == "1" and _onboarding_pending()
+    )
     reachable, cloud_error = (
-        check_cloud() if check_cloud and config.r2 else (None, None)
+        check_cloud()
+        if check_cloud and config.r2 and not onboarding_will_probe
+        else (None, None)
     )
     return {
         "ok": True,
@@ -757,19 +768,30 @@ def finalize_session(request: Request, session_id: str) -> SessionResponse:
             raise HTTPException(404, "Event not found")
         session_dir = Path(session.local_path)
         strip_path = session_dir / "strip.jpg"
+        cloud_target = r2_session_target(event.id, session.id)
         # Idempotency: if this session already produced a strip, it was finalized
-        # already. Return it as-is (best-effort re-enqueue is deduped) instead of
-        # recomposing and re-counting.
+        # already. Repair any DB/meta work interrupted after the atomic image
+        # write before returning it.
         if jpeg_is_intact(strip_path):
+            storage.mark_session_finalized(session.id)
+            storage.merge_session_meta(
+                session,
+                {
+                    "session_id": session.id,
+                    "event_id": event.id,
+                    "r2_target": cloud_target,
+                    "upload_status": session.upload_status,
+                },
+            )
             request.app.state.upload_queue.enqueue_best_effort(
                 UploadJob(
                     session_id=session.id,
                     event_id=event.id,
                     session_dir=session_dir,
-                    cloud_target=storage.get_session_target(session.id),
+                    cloud_target=cloud_target,
                 )
             )
-            return _session_response(session)
+            return _session_response(storage.get_session(session.id) or session)
 
         photos = [session_dir / f"photo-{i}.jpg" for i in range(1, 4)]
         for photo in photos:
@@ -786,10 +808,9 @@ def finalize_session(request: Request, session_id: str) -> SessionResponse:
             strip_path,
             date_separator=event.date_separator,
         )
-        storage.increment_event_photo_count(event.id)
+        storage.mark_session_finalized(session.id)
         event = storage.get_event(event.id) or event
 
-        cloud_target = r2_session_target(event.id, session.id)
         storage.write_session_meta(
             session,
             {
@@ -855,6 +876,16 @@ def kiosk_heartbeat(request: Request) -> dict:
     if watchdog is not None:
         watchdog.beat()
     return {"ok": True}
+
+
+@router.get("/kiosk/status")
+def kiosk_status(request: Request) -> dict:
+    watchdog = getattr(request.app.state, "kiosk_watchdog", None)
+    return {
+        "heartbeat_age_seconds": (
+            watchdog.heartbeat_age if watchdog is not None else None
+        )
+    }
 
 
 @router.get("/qr")
