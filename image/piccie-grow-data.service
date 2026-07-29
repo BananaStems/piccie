@@ -1,8 +1,8 @@
 [Unit]
 Description=Expand Piccie data partition before it is mounted
 DefaultDependencies=no
-Wants=systemd-udev-settle.service local-fs-pre.target
-After=systemd-udev-settle.service
+Wants=systemd-udev-trigger.service local-fs-pre.target
+After=systemd-udev-trigger.service
 Before=local-fs-pre.target data.mount data-fallback.service piccie-firstboot-datapart.service piccie-engine.service
 
 [Service]

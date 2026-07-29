@@ -12,6 +12,7 @@ SYS_BLOCK="${PICCIE_GROW_DATA_SYS_BLOCK:-/sys/class/block}"
 DEGRADED_MARKER="${PICCIE_GROW_DATA_DEGRADED_MARKER:-/run/piccie.degraded}"
 FAILURE_MARKER="${PICCIE_GROW_DATA_FAILURE_MARKER:-/run/piccie-data-grow.failed}"
 EXPECTED_PARTITION=3
+DEVICE_WAIT_SECONDS="${PICCIE_GROW_DATA_DEVICE_WAIT_SECONDS:-60}"
 
 log() {
   echo "piccie-grow-data: $*"
@@ -38,15 +39,24 @@ read_uint() {
 }
 
 resolve_data_device() {
-  local source=""
-  source="$(findmnt --fstab --evaluate --noheadings --output SOURCE --target "${DATA_MOUNT}" 2>/dev/null || true)"
-  [[ -n "${source}" && "${source}" != *$'\n'* ]] \
-    || die "could not resolve exactly one ${DATA_MOUNT} source from /etc/fstab"
-  [[ "${source}" == /dev/* ]] \
-    || die "${DATA_MOUNT} source did not resolve to a block device: ${source}"
+  local attempt source=""
+  [[ "${DEVICE_WAIT_SECONDS}" =~ ^[0-9]+$ ]] \
+    || die "invalid device wait timeout: ${DEVICE_WAIT_SECONDS}"
 
-  DATA_DEV="$(canonicalize_device "${source}")"
-  is_block_device "${DATA_DEV}" || die "${DATA_MOUNT} source is not a block device: ${DATA_DEV}"
+  # Wait only for the fstab-resolved /data device. A global udev settle can
+  # block on unrelated or absent hardware and deadlock appliance startup.
+  for ((attempt = 0; attempt <= DEVICE_WAIT_SECONDS; attempt++)); do
+    source="$(findmnt --fstab --evaluate --noheadings --output SOURCE --target "${DATA_MOUNT}" 2>/dev/null || true)"
+    if [[ -n "${source}" && "${source}" != *$'\n'* && "${source}" == /dev/* ]]; then
+      DATA_DEV="$(canonicalize_device "${source}")"
+      if is_block_device "${DATA_DEV}"; then
+        break
+      fi
+    fi
+    ((attempt < DEVICE_WAIT_SECONDS)) || \
+      die "timed out waiting for ${DATA_MOUNT} block device from /etc/fstab"
+    sleep 1
+  done
 
   DATA_KNAME="$(lsblk --noheadings --nodeps --output KNAME "${DATA_DEV}" | xargs)"
   [[ -n "${DATA_KNAME}" ]] || die "lsblk could not identify ${DATA_DEV}"

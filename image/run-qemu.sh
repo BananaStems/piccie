@@ -20,6 +20,8 @@ HEADLESS="${PICCIE_QEMU_HEADLESS:-0}"
 BACKGROUND="${PICCIE_QEMU_BACKGROUND:-0}"
 REUSE_IMAGE="${PICCIE_QEMU_REUSE_IMAGE:-0}"
 EXTRA_SIZE="${PICCIE_QEMU_EXTRA_SIZE:-2147483648}"
+NETWORK="${PICCIE_QEMU_NETWORK:-1}"
+ACCEL="${PICCIE_QEMU_ACCEL:-}"
 
 if [[ ! -f "${IMG}" ]]; then
   echo "Image not found: ${IMG}" >&2
@@ -101,8 +103,12 @@ fi
 
 echo ""
 echo "Starting QEMU (${MACHINE}, root=${ROOT_DEV})..."
-echo "  SSH:      key-only on port ${SSH_PORT} (if a key was installed in the image)"
-echo "  Booth UI: http://localhost:${HTTP_PORT}  (first boot is slow — 5–15 min on Mac)"
+if [[ "${NETWORK}" == "1" ]]; then
+  echo "  SSH:      key-only on port ${SSH_PORT} (if a key was installed in the image)"
+  echo "  Booth UI: http://localhost:${HTTP_PORT}  (first boot is slow — 5–15 min on Mac)"
+else
+  echo "  Network:  disabled (serial boot validation)"
+fi
 echo "  Stop:     Ctrl+A then X  (or close the window)"
 echo ""
 
@@ -115,12 +121,19 @@ QEMU_ARGS=(
   -dtb "${DTB}"
   -drive "file=${QEMU_IMG},format=qcow2,if=sd"
   -append "${APPEND}"
-  -usb
-  -netdev "user,id=net0,hostfwd=tcp:127.0.0.1:${SSH_PORT}-:22,hostfwd=tcp:127.0.0.1:${HTTP_PORT}-:8080"
-  -device usb-net,netdev=net0
   "${DISPLAY_ARGS[@]}"
   -serial mon:stdio
 )
+if [[ -n "${ACCEL}" ]]; then
+  QEMU_ARGS=(-accel "${ACCEL}" "${QEMU_ARGS[@]}")
+fi
+if [[ "${NETWORK}" == "1" ]]; then
+  QEMU_ARGS+=(
+    -usb
+    -netdev "user,id=net0,hostfwd=tcp:127.0.0.1:${SSH_PORT}-:22,hostfwd=tcp:127.0.0.1:${HTTP_PORT}-:8080"
+    -device usb-net,netdev=net0
+  )
+fi
 
 if [[ "${BACKGROUND}" == "1" ]]; then
   qemu-system-aarch64 "${QEMU_ARGS[@]}" &

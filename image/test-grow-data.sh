@@ -55,6 +55,8 @@ setup_fixture() {
   WRITE_STUCK_FILE="${FIXTURE}/write-stuck"
   RESIZE_STUCK_FILE="${FIXTURE}/resize-stuck"
   LABEL_FILE="${FIXTURE}/label"
+  DEVICE_UNAVAILABLE_FILE="${FIXTURE}/device-unavailable"
+  DEVICE_WAIT_SECONDS=60
 
   printf '3\n' >"${SYS_BLOCK}/fakediskp3/partition"
   printf '128\n' >"${SYS_BLOCK}/fakediskp3/start"
@@ -82,6 +84,7 @@ findmnt() {
   local arg
   for arg in "$@"; do
     if [[ "${arg}" == "--fstab" ]]; then
+      [[ ! -e "${DEVICE_UNAVAILABLE_FILE}" ]] || return 1
       printf '/dev/fakediskp3\n'
       return
     fi
@@ -247,6 +250,17 @@ test_wrong_partition_number_fails_without_changes() {
   assert_contains "${OUTPUT_FILE}" "expected the dedicated p3"
 }
 
+test_missing_data_device_times_out_without_changes() {
+  setup_fixture
+  touch "${DEVICE_UNAVAILABLE_FILE}"
+  DEVICE_WAIT_SECONDS=0
+  if (main) >"${OUTPUT_FILE}" 2>&1; then
+    fail "missing data device was accepted"
+  fi
+  assert_contains "${OUTPUT_FILE}" "timed out waiting for ${DATA_MOUNT} block device"
+  [[ ! -s "${ACTIONS_FILE}" ]] || fail "missing device caused a mutating action"
+}
+
 test_nonfinal_partition_fails_without_changes() {
   setup_fixture
   touch "${EXTRA_PARTITION_FILE}"
@@ -354,6 +368,8 @@ test_systemd_ordering_keeps_growth_offline() {
   local fstab="${REPO_ROOT}/image/pigen/fstab"
 
   assert_contains "${grow_unit}" "Before=local-fs-pre.target data.mount"
+  assert_contains "${grow_unit}" "After=systemd-udev-trigger.service"
+  assert_not_contains "${grow_unit}" "systemd-udev-settle.service"
   assert_contains "${grow_unit}" "WantedBy=sysinit.target"
   assert_contains "${fstab}" "x-systemd.before=NetworkManager.service  0  0"
   assert_contains "${fallback_unit}" "After=piccie-grow-data.service local-fs.target data.mount"
@@ -438,7 +454,8 @@ test_recovery_and_release_contracts_are_baked_into_image() {
   assert_contains "${setup}" "piccie-clock-sync"
   assert_contains "${setup}" "piccie-restart-engine"
   assert_contains "${setup}" "piccie-poweroff.timer"
-  assert_contains "${smoke}" "/healthz"
+  assert_contains "${smoke}" "Application startup complete"
+  assert_contains "${smoke}" "PICCIE_QEMU_NETWORK=0"
   assert_contains "${bootdiag}" "piccie-boot-diag.previous.txt"
   assert_contains "${bootdiag}" "piccie-boot-count"
   assert_contains "${updater_sudoers}" "NOPASSWD: /usr/local/sbin/piccie-restart-engine"
@@ -456,6 +473,7 @@ run_test test_partition_growth_requests_one_reboot
 run_test test_second_boot_grows_and_verifies_ext4
 run_test test_full_device_is_idempotent
 run_test test_one_ext4_block_short_is_grown
+run_test test_missing_data_device_times_out_without_changes
 run_test test_wrong_partition_number_fails_without_changes
 run_test test_nonfinal_partition_fails_without_changes
 run_test test_unexpected_filesystem_label_fails_without_changes
