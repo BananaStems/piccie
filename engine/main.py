@@ -10,6 +10,7 @@ from fastapi.staticfiles import StaticFiles
 
 from engine.api.routes import router
 from engine.camera import CameraService
+from engine.capture_delivery import CaptureDelivery
 from engine.config import ROOT_DIR, ConfigStore
 from engine.kiosk_watchdog import KioskWatchdog
 from engine.storage import Storage
@@ -49,15 +50,16 @@ async def lifespan(app: FastAPI):
     app.state.templates = TemplateRegistry()
     app.state.camera = CameraService()
     app.state.upload_queue = UploadQueue(storage, store)
-    # Serializes finalize so a double-tap can't compose/count a session twice.
-    app.state.finalize_lock = threading.Lock()
+    app.state.capture_delivery = CaptureDelivery(
+        storage,
+        app.state.camera,
+        app.state.templates,
+        app.state.upload_queue,
+    )
     # Restarts Chromium when the kiosk page stops heartbeating (appliance only;
     # armed via PICCIE_KIOSK_WATCHDOG=1 in the systemd unit).
     app.state.kiosk_watchdog = KioskWatchdog()
-    storage.prune_abandoned_sessions()
-    storage.sweep_orphan_dirs()
-    storage.reconcile_finalized_sessions()
-    app.state.upload_queue.resume_pending()
+    app.state.capture_delivery.recover()
     app.state.upload_queue.check_cloud_health_async()
     yield
     app.state.upload_queue.close()

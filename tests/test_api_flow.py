@@ -12,6 +12,7 @@ os.environ["PICCIE_CAMERA"] = "mock"
 
 from engine.api.routes import router
 from engine.camera import CameraService
+from engine.capture_delivery import CaptureDelivery
 from engine.config import ConfigStore
 from engine.storage import Storage
 from engine.templates import TemplateRegistry
@@ -46,7 +47,12 @@ def client(tmp_path, monkeypatch):
     app.state.templates = TemplateRegistry(custom_templates_dir=tmp_path / "templates")
     app.state.camera = CameraService()
     app.state.upload_queue = FakeUploadQueue()
-    app.state.finalize_lock = threading.Lock()
+    app.state.capture_delivery = CaptureDelivery(
+        app.state.storage,
+        app.state.camera,
+        app.state.templates,
+        app.state.upload_queue,
+    )
     app.state.admin_tokens = set()
     app.state.onboarding_lock = threading.Lock()
     app.state.kiosk_watchdog = None
@@ -146,7 +152,7 @@ def test_concluded_event_cannot_launch_or_start_session(client):
 def test_degraded_storage_blocks_capture_session(client, monkeypatch):
     test_client, app = client
     event = app.state.storage.create_event("Wedding", "2026-08-01", "classic")
-    monkeypatch.setattr("engine.api.routes.data_degraded", lambda: True)
+    monkeypatch.setattr("engine.capture_delivery.data_degraded", lambda: True)
 
     response = test_client.post(f"/api/events/{event.id}/sessions")
 

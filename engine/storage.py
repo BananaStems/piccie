@@ -499,13 +499,24 @@ class Storage:
     def reconcile_finalized_sessions(self) -> int:
         """Repair finalization interrupted after the atomic strip write."""
         with self._connect() as conn:
-            rows = conn.execute("SELECT id, local_path FROM sessions").fetchall()
-        completed = [
+            rows = conn.execute(
+                "SELECT id, local_path, finalized_at FROM sessions"
+            ).fetchall()
+        completed = {
             row["id"]
             for row in rows
             if jpeg_is_intact(Path(row["local_path"]) / "strip.jpg")
+        }
+        incomplete = [
+            row["id"]
+            for row in rows
+            if row["finalized_at"] is not None and row["id"] not in completed
         ]
         with self._connect() as conn:
+            conn.executemany(
+                "UPDATE sessions SET finalized_at = NULL WHERE id = ?",
+                ((session_id,) for session_id in incomplete),
+            )
             conn.executemany(
                 """
                 UPDATE sessions

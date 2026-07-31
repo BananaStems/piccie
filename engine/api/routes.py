@@ -13,6 +13,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, Response, StreamingResponse
 
+from engine.atomicio import jpeg_is_intact
 from engine.api.schemas import (
     ActiveEventRequest,
     AdminUnlockRequest,
@@ -28,17 +29,16 @@ from engine.api.schemas import (
     WifiConnectRequest,
     WifiNetworkResponse,
 )
-from engine.atomicio import jpeg_is_intact
 from engine.camera import appliance_qemu
 from engine.camera_settings import CAMERA_SETTING_OPTIONS
+from engine.capture_delivery import CaptureDeliveryError
 from engine.composer import (
     _layout_metrics,
-    compose_strip,
     render_strip_preview_jpeg,
     strip_dimensions,
 )
 from engine.config import AppConfig, ConfigStore
-from engine.paths import r2_session_target, slugify
+from engine.paths import slugify
 from engine.performance import (
     DEVICE_OPTIONS,
     apply_performance_profile,
@@ -52,11 +52,17 @@ from engine.r2 import R2Uploader
 from engine.storage import data_degraded, disk_free_mb, disk_low
 from engine.template_packages import GOOGLE_FONTS, install_template
 from engine.templates import TemplateRegistry
-from engine.upload_queue import UploadJob
 from engine.version import APP_VERSION, BUILD_ID
 from engine.wifi import connect_network, current_ssid, list_networks
 
 router = APIRouter(prefix="/api")
+
+
+def _capture_call(operation, *args):
+    try:
+        return operation(*args)
+    except CaptureDeliveryError as exc:
+        raise HTTPException(exc.status_code, exc.detail) from exc
 
 
 def _ready_config(request: Request) -> AppConfig:
@@ -691,25 +697,7 @@ def template_preview(
 
 @router.post("/events/{event_id}/sessions", response_model=SessionResponse)
 def start_session(request: Request, event_id: str) -> SessionResponse:
-    storage = request.app.state.storage
-    event = storage.get_event(event_id)
-    if not event:
-        raise HTTPException(404, "Event not found")
-    if event.is_concluded():
-        raise HTTPException(409, "This event has concluded. Edit its end time to launch it again.")
-    if not request.app.state.camera.available:
-        raise HTTPException(503, "Camera unavailable")
-    if data_degraded():
-        raise HTTPException(
-            503,
-            "Photo storage is degraded. Restart the booth and repair /data before taking photos.",
-        )
-    if disk_low():
-        raise HTTPException(
-            507,
-            f"Storage almost full ({disk_free_mb()} MB free). Delete old events to continue.",
-        )
-    session = storage.create_session(event_id)
+    session = _capture_call(request.app.state.capture_delivery.start, event_id)
     return _session_response(session)
 
 
@@ -728,25 +716,11 @@ def get_session_photo(request: Request, session_id: str, photo_index: int):
 
 @router.post("/sessions/{session_id}/capture/{photo_index}", response_model=CaptureResponse)
 def capture_photo(request: Request, session_id: str, photo_index: int) -> CaptureResponse:
-    if photo_index not in (1, 2, 3):
-        raise HTTPException(400, "photo_index must be 1, 2, or 3")
-    storage = request.app.state.storage
-    session = storage.get_session(session_id)
-    if not session:
-        raise HTTPException(404, "Session not found")
-    event = storage.get_event(session.event_id)
-    if not event:
-        raise HTTPException(404, "Event not found")
-    # Photo saved full-frame; the strip composer crops each photo to its slot,
-    # so cropping at capture time would only re-encode the frame a second time.
-    path = Path(session.local_path) / f"photo-{photo_index}.jpg"
-    try:
-        request.app.state.camera.capture_to_file(
-            path,
-            label=f"Photo {photo_index}",
-        )
-    except Exception as exc:
-        raise HTTPException(500, f"Capture failed: {exc}") from exc
+    _capture_call(
+        request.app.state.capture_delivery.capture,
+        session_id,
+        photo_index,
+    )
     return CaptureResponse(
         photo_index=photo_index,
         local_url=f"/api/sessions/{session_id}/photos/{photo_index}",
@@ -755,84 +729,11 @@ def capture_photo(request: Request, session_id: str, photo_index: int) -> Captur
 
 @router.post("/sessions/{session_id}/finalize", response_model=SessionResponse)
 def finalize_session(request: Request, session_id: str) -> SessionResponse:
-    storage = request.app.state.storage
-    # Serialize finalize: a touchscreen double-tap can fire this twice. Without
-    # the lock both calls compose the strip (heavy CPU burst x2) and double-
-    # increment photo_count, which would skew the strip count.
-    with request.app.state.finalize_lock:
-        session = storage.get_session(session_id)
-        if not session:
-            raise HTTPException(404, "Session not found")
-        event = storage.get_event(session.event_id)
-        if not event:
-            raise HTTPException(404, "Event not found")
-        session_dir = Path(session.local_path)
-        strip_path = session_dir / "strip.jpg"
-        cloud_target = r2_session_target(event.id, session.id)
-        # Idempotency: if this session already produced a strip, it was finalized
-        # already. Repair any DB/meta work interrupted after the atomic image
-        # write before returning it.
-        if jpeg_is_intact(strip_path):
-            storage.mark_session_finalized(session.id)
-            storage.merge_session_meta(
-                session,
-                {
-                    "session_id": session.id,
-                    "event_id": event.id,
-                    "r2_target": cloud_target,
-                    "upload_status": session.upload_status,
-                },
-            )
-            request.app.state.upload_queue.enqueue_best_effort(
-                UploadJob(
-                    session_id=session.id,
-                    event_id=event.id,
-                    session_dir=session_dir,
-                    cloud_target=cloud_target,
-                )
-            )
-            return _session_response(storage.get_session(session.id) or session)
-
-        photos = [session_dir / f"photo-{i}.jpg" for i in range(1, 4)]
-        for photo in photos:
-            if not photo.exists():
-                raise HTTPException(400, f"Missing {photo.name}")
-        registry: TemplateRegistry = request.app.state.templates
-        template = registry.load(event.template_id)
-        compose_strip(
-            template,
-            photos,
-            event.strip_line1(),
-            event.line2,
-            event.date,
-            strip_path,
-            date_separator=event.date_separator,
-        )
-        storage.mark_session_finalized(session.id)
-        event = storage.get_event(event.id) or event
-
-        storage.write_session_meta(
-            session,
-            {
-                "session_id": session.id,
-                "event_id": event.id,
-                "r2_target": cloud_target,
-                "upload_status": "pending",
-            },
-        )
-        # Never fail finalize on queue pressure: the local strip already works for
-        # the result screen, and the periodic rescan retries the upload.
-        request.app.state.upload_queue.enqueue_best_effort(
-            UploadJob(
-                session_id=session.id,
-                event_id=event.id,
-                session_dir=session_dir,
-                cloud_target=cloud_target,
-            )
-        )
-        session = storage.get_session(session_id)
-        assert session is not None
-        return _session_response(session)
+    session = _capture_call(
+        request.app.state.capture_delivery.finalize,
+        session_id,
+    )
+    return _session_response(session)
 
 
 @router.get("/sessions/{session_id}", response_model=SessionResponse)
