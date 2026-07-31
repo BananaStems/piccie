@@ -152,6 +152,19 @@ Writing the image erases the selected card. Check the storage target carefully.
 After Raspberry Pi Imager finishes, remove and reinsert the microSD card if its
 boot drive is not visible. The drive works on macOS, Windows and Linux.
 
+If you build or flash cards from a Piccie source checkout, keep a reusable
+private copy at the project root:
+
+```sh
+./image/copy-r2-to-card.sh --init
+```
+
+Fill in the generated `piccie-r2.txt` once. Git ignores this private file. After
+each flash, reinsert the card and run `./image/copy-r2-to-card.sh`. The helper
+validates the settings and copies them only to an identifiable Raspberry Pi
+boot volume. If auto-detection is ambiguous, pass the volume explicitly, such
+as `./image/copy-r2-to-card.sh /Volumes/bootfs`.
+
 1. Open `piccie-r2.txt` on the microSD boot drive. The file contains the same
    instructions and blank settings to complete.
 2. Sign in to the [Cloudflare dashboard](https://dash.cloudflare.com/), open

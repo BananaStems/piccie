@@ -28,4 +28,5 @@ jobs:
       - run: bash image/test-readonly-root.sh
       - run: bash image/test-performance.sh
       - run: bash image/test-shutdown.sh
+      - run: bash image/test-copy-r2-to-card.sh
       - run: bash image/test-clock-sync.sh

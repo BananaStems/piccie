@@ -25,6 +25,7 @@ bash image/test-grow-data.sh
 bash image/test-readonly-root.sh
 bash image/test-performance.sh
 bash image/test-shutdown.sh
+bash image/test-copy-r2-to-card.sh
 bash image/test-appliance.sh
 
 shopt -s nullglob
