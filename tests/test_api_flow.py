@@ -10,6 +10,8 @@ from fastapi.testclient import TestClient
 
 os.environ["PICCIE_CAMERA"] = "mock"
 
+TEST_SSH_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAID7xmMhz1/FKQxq0ML54lMRKG/th7+UEMiaq7HLEJHNC test-deploy"
+
 from engine.api.routes import router
 from engine.camera import CameraService
 from engine.capture_delivery import CaptureDelivery
@@ -37,6 +39,10 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setenv("PICCIE_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("PICCIE_ONBOARDING_DATA_DIR", str(tmp_path))
     monkeypatch.setattr("engine.config.LOCAL_CONFIG_PATH", tmp_path / "local.json")
+    monkeypatch.setattr(
+        "engine.ssh_access.AUTHORIZED_KEYS_PATH",
+        tmp_path / "ssh" / "authorized_keys",
+    )
     monkeypatch.setattr("engine.storage.DATA_DIR", tmp_path)
     monkeypatch.setattr("engine.storage.RUN_DEGRADED_MARKER", tmp_path / ".run-degraded")
 
@@ -80,6 +86,8 @@ def test_operator_auth_event_and_capture_flow(client):
     }
 
     assert test_client.post("/api/events", json=event_body).status_code == 401
+    assert test_client.post("/api/admin/unlock", json={"pin": "123"}).status_code == 422
+    assert test_client.post("/api/admin/unlock", json={"pin": "12345"}).status_code == 422
     assert test_client.post("/api/admin/unlock", json={"pin": "0000"}).status_code == 401
     token = test_client.post("/api/admin/unlock", json={"pin": "2468"}).json()["token"]
     headers = {"X-Admin-Token": token}
@@ -130,7 +138,7 @@ def test_operator_auth_event_and_capture_flow(client):
     assert app.state.storage.get_event(event["id"]).photo_count == 1
     assert app.state.storage.get_session_meta(
         app.state.storage.get_session(session_id)
-    )["r2_target"].endswith(session_id)
+    )["r2_target"].endswith(":launch-test-strip-00001")
 
     cleared = test_client.put(
         "/api/admin/active-event", json={"event_id": None}, headers=headers
@@ -147,6 +155,72 @@ def test_concluded_event_cannot_launch_or_start_session(client):
     assert response.status_code == 409
     assert "concluded" in response.json()["detail"]
     assert test_client.post(f"/api/events/{event.id}/sessions").status_code == 409
+
+
+def test_operator_can_delete_one_gallery_strip_without_removing_others(client):
+    test_client, app = client
+    from PIL import Image
+
+    app.state.config_store.set_admin_pin("2468")
+    token = test_client.post("/api/admin/unlock", json={"pin": "2468"}).json()["token"]
+    headers = {"X-Admin-Token": token}
+    event = app.state.storage.create_event("Wedding", "2026-08-01", "classic")
+    first = app.state.storage.create_session(event.id)
+    second = app.state.storage.create_session(event.id)
+    for session in (first, second):
+        Image.new("RGB", (2, 6)).save(Path(session.local_path) / "strip.jpg")
+        Image.new("RGB", (2, 2)).save(Path(session.local_path) / "photo-1.jpg")
+        app.state.storage.mark_session_finalized(session.id)
+
+    assert test_client.delete(f"/api/sessions/{first.id}").status_code == 401
+    deleted = test_client.delete(f"/api/sessions/{first.id}", headers=headers)
+
+    assert deleted.json() == {"ok": True, "share_disabled": False}
+    assert test_client.get(f"/api/sessions/{first.id}").status_code == 404
+    remaining = test_client.get(f"/api/events/{event.id}/sessions").json()
+    assert [session["id"] for session in remaining] == [second.id]
+    assert app.state.storage.get_event(event.id).photo_count == 1
+    assert app.state.storage.pending_r2_deletions() == [
+        f"named-event-session:{event.id}:{first.id}:{event.r2_folder}:wedding-strip-00001"
+    ]
+    assert test_client.delete(f"/api/sessions/{first.id}", headers=headers).status_code == 404
+
+
+def test_guest_qr_uses_short_lan_redirect(client, monkeypatch):
+    test_client, app = client
+    monkeypatch.setattr("engine.api.routes._lan_ip", lambda: "192.168.1.40")
+    event = app.state.storage.create_event("Wedding", "2026-08-01", "classic")
+    session = app.state.storage.create_session(event.id)
+    signed_url = "https://signed.example/events/event/session/index.html?signature=long"
+    app.state.storage.update_session_upload(
+        session.id,
+        "complete",
+        signed_url,
+    )
+
+    response = test_client.get(f"/api/sessions/{session.id}")
+    qr_url = response.json()["guest_qr_url"]
+
+    assert qr_url == f"http://192.168.1.40:8080/api/d/{session.id}"
+    assert len(qr_url) < len(signed_url)
+    redirect = test_client.get(f"/api/d/{session.id}", follow_redirects=False)
+    assert redirect.status_code == 307
+    assert redirect.headers["location"] == signed_url
+    assert redirect.headers["cache-control"] == "no-store"
+
+
+def test_qr_endpoint_renders_short_link_locally(client):
+    test_client, _app = client
+
+    response = test_client.get(
+        "/api/qr",
+        params={"data": "http://192.168.1.40:8080/api/d/session-id"},
+    )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "image/png"
+    assert response.headers["cache-control"] == "no-store"
+    assert response.content.startswith(b"\x89PNG\r\n\x1a\n")
 
 
 def test_degraded_storage_blocks_capture_session(client, monkeypatch):
@@ -221,6 +295,59 @@ def test_performance_mode_requires_matching_device_and_warning(client, monkeypat
     assert changed.json() == {"ok": True, "restarting": True}
     assert applied == [("pi4", "performance")]
     assert app.state.config_store.ensure().performance_mode == "performance"
+
+
+def test_operator_can_update_pin_and_ssh_access_from_settings(client):
+    test_client, app = client
+    app.state.config_store.set_admin_pin("2468")
+    old_token = test_client.post("/api/admin/unlock", json={"pin": "2468"}).json()["token"]
+    old_headers = {"X-Admin-Token": old_token}
+
+    assert test_client.get("/api/settings/access").status_code == 401
+    access = test_client.get("/api/settings/access", headers=old_headers)
+    assert access.status_code == 200
+    assert access.json()["ssh_key_configured"] is False
+
+    invalid_pin = test_client.put(
+        "/api/settings/access/pin",
+        json={"pin": "12345"},
+        headers=old_headers,
+    )
+    assert invalid_pin.status_code == 422
+
+    invalid = test_client.put(
+        "/api/settings/access/ssh",
+        json={"ssh_authorized_key": "not-a-key"},
+        headers=old_headers,
+    )
+    assert invalid.status_code == 422
+    added = test_client.put(
+        "/api/settings/access/ssh",
+        json={"ssh_authorized_key": TEST_SSH_KEY},
+        headers=old_headers,
+    )
+    assert added.json() == {"ok": True, "ssh_key_configured": True}
+    assert (app.state.storage.db_path.parent / "ssh" / "authorized_keys").read_text() == TEST_SSH_KEY + "\n"
+
+    changed = test_client.put(
+        "/api/settings/access/pin",
+        json={"pin": "8642"},
+        headers=old_headers,
+    )
+    assert changed.status_code == 200
+    new_headers = {"X-Admin-Token": changed.json()["token"]}
+    assert test_client.get("/api/settings/access", headers=old_headers).status_code == 401
+    assert test_client.get("/api/settings/access", headers=new_headers).status_code == 200
+
+    removed = test_client.put(
+        "/api/settings/access/ssh",
+        json={"ssh_authorized_key": ""},
+        headers=new_headers,
+    )
+    assert removed.json() == {"ok": True, "ssh_key_configured": False}
+    assert not (app.state.storage.db_path.parent / "ssh" / "authorized_keys").exists()
+    assert test_client.post("/api/admin/unlock", json={"pin": "2468"}).status_code == 401
+    assert test_client.post("/api/admin/unlock", json={"pin": "8642"}).status_code == 200
 
 
 def test_safe_shutdown_requires_operator_and_schedules_poweroff(client, monkeypatch):
@@ -328,6 +455,12 @@ def test_kiosk_onboarding_requires_imported_r2_then_finishes(client, monkeypatch
     connection = {"ssid": None}
     monkeypatch.setattr("engine.api.routes.current_ssid", lambda: connection["ssid"])
 
+    invalid_pin = test_client.post(
+        "/api/onboarding/complete",
+        json={"admin_pin": "12345"},
+    )
+    assert invalid_pin.status_code == 422
+
     blocked = test_client.post(
         "/api/onboarding/complete",
         json={"admin_pin": "2468"},
@@ -361,14 +494,14 @@ def test_kiosk_onboarding_requires_imported_r2_then_finishes(client, monkeypatch
         "/api/onboarding/complete",
         json={
             "admin_pin": "2468",
-            "ssh_authorized_key": "ssh-ed25519 AAAATEST operator",
+            "ssh_authorized_key": TEST_SSH_KEY,
         },
     )
     assert completed.status_code == 200
     assert completed.json()["restarting"] is False
     assert (tmp_path / ".provisioned").exists()
     assert not (tmp_path / ".lockdown-requested").exists()
-    assert (tmp_path / "ssh" / "authorized_keys").read_text() == "ssh-ed25519 AAAATEST operator\n"
+    assert (tmp_path / "ssh" / "authorized_keys").read_text() == TEST_SSH_KEY + "\n"
     assert app.state.config_store.ensure().r2.bucket == "photo-strips"
     assert test_client.post("/api/admin/unlock", json={"pin": "2468"}).status_code == 200
 
@@ -396,6 +529,10 @@ def test_event_share_builds_archive_and_can_be_disabled(client, monkeypatch):
     session = app.state.storage.create_session(event.id)
     from PIL import Image
     Image.new("RGB", (2, 6)).save(Path(session.local_path) / "strip.jpg")
+    for photo_index in range(1, 4):
+        Image.new("RGB", (2, 2)).save(
+            Path(session.local_path) / f"photo-{photo_index}.jpg"
+        )
 
     class FakeUploader:
         previous = []
@@ -404,9 +541,23 @@ def test_event_share_builds_archive_and_can_be_disabled(client, monkeypatch):
         def __init__(self, _config):
             pass
 
-        def publish_event(self, event_id, _name, _date, archive, previous_token=None):
+        def publish_event(
+            self,
+            event_id,
+            _name,
+            _date,
+            archive,
+            previous_token=None,
+            event_folder=None,
+        ):
             with zipfile.ZipFile(archive) as bundle:
-                assert bundle.namelist() == ["wedding-strip-001.jpg"]
+                assert bundle.namelist() == [
+                    "strips/wedding-strip-00001.jpg",
+                    "photos/wedding-strip-00001-photo-01.jpg",
+                    "photos/wedding-strip-00001-photo-02.jpg",
+                    "photos/wedding-strip-00001-photo-03.jpg",
+                ]
+            assert event_folder == "wedding-2026-08-01"
             self.previous.append(previous_token)
             token = f"{event_id}.new-token"
             return f"https://gallery.example/g/{token}", token

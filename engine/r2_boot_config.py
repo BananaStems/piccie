@@ -7,6 +7,7 @@ import re
 from pathlib import Path
 
 from engine.atomicio import write_json_atomic, write_text_atomic
+from engine.ssh_access import normalize_authorized_key, set_authorized_key
 
 BOOT_CONFIG_PATH = Path(
     os.environ.get("PICCIE_R2_BOOT_CONFIG", "/boot/firmware/piccie-r2.txt")
@@ -21,13 +22,15 @@ DEGRADED_MARKERS = (
     Path("/run/piccie.degraded"),
     Path("/data/.DEGRADED"),
 )
-EXPECTED_KEYS = {
+REQUIRED_KEYS = {
     "ACCOUNT_ID",
     "ACCESS_KEY_ID",
     "SECRET_ACCESS_KEY",
     "BUCKET_NAME",
     "JURISDICTION",
 }
+OPTIONAL_KEYS = {"SSH_AUTHORIZED_KEY"}
+EXPECTED_KEYS = REQUIRED_KEYS | OPTIONAL_KEYS
 
 
 class BootConfigError(ValueError):
@@ -50,14 +53,14 @@ def parse_boot_config(text: str) -> dict[str, str]:
         if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
             value = value[1:-1]
         values[key] = value.strip()
-    missing = sorted(EXPECTED_KEYS - values.keys())
+    missing = sorted(REQUIRED_KEYS - values.keys())
     if missing:
         raise BootConfigError(f"Missing setting: {missing[0]}.")
     return values
 
 
 def validated_r2(values: dict[str, str]) -> dict[str, str]:
-    empty = [key for key in EXPECTED_KEYS - {"JURISDICTION"} if not values[key]]
+    empty = [key for key in REQUIRED_KEYS - {"JURISDICTION"} if not values[key]]
     if empty:
         raise BootConfigError(
             "Setup is incomplete. Fill in " + ", ".join(sorted(empty)) + "."
@@ -84,6 +87,13 @@ def validated_r2(values: dict[str, str]) -> dict[str, str]:
     }
 
 
+def validated_ssh_key(values: dict[str, str]) -> str:
+    try:
+        return normalize_authorized_key(values.get("SSH_AUTHORIZED_KEY", ""))
+    except ValueError as exc:
+        raise BootConfigError(f"SSH_AUTHORIZED_KEY is invalid: {exc}") from exc
+
+
 def _write_status(message: str, status_path: Path) -> None:
     try:
         write_text_atomic(status_path, message.rstrip() + "\n")
@@ -97,12 +107,14 @@ def import_boot_config(
     destination: Path = LOCAL_CONFIG_PATH,
     status_path: Path = STATUS_PATH,
     degraded_markers: tuple[Path, ...] = DEGRADED_MARKERS,
+    authorized_keys_path: Path | None = None,
 ) -> bool:
     if not source.exists():
         return False
     try:
         values = parse_boot_config(source.read_text())
         r2 = validated_r2(values)
+        ssh_key = validated_ssh_key(values)
     except (OSError, UnicodeError, BootConfigError) as exc:
         _write_status(f"Piccie did not import R2 settings: {exc}", status_path)
         return False
@@ -124,9 +136,12 @@ def import_boot_config(
             os.chown(destination, pi.pw_uid, pi.pw_gid)
         except (KeyError, PermissionError):
             pass
+        if ssh_key:
+            set_authorized_key(ssh_key, authorized_keys_path)
         source.unlink()
         _write_status(
-            "R2 settings imported or updated successfully. The credential copy was removed.",
+            "R2 settings and optional SSH access imported successfully. "
+            "The credential copy was removed.",
             status_path,
         )
         return True

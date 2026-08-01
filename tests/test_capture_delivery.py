@@ -73,7 +73,8 @@ def test_complete_lifecycle_and_duplicate_finalize(capture_delivery):
     meta = storage.get_session_meta(storage.get_session(session.id))
     assert meta["session_id"] == session.id
     assert meta["event_id"] == event.id
-    assert meta["r2_target"].endswith(session.id)
+    assert meta["strip_number"] == 1
+    assert meta["r2_target"].endswith(":wedding-strip-00001")
     assert uploads.jobs
 
 
@@ -107,7 +108,9 @@ def test_recover_repairs_intact_strip_and_resumes_upload(capture_delivery):
     repaired = storage.get_session(session.id)
     assert repaired.finalized_at
     assert storage.get_event(event.id).photo_count == 1
-    assert storage.get_session_meta(repaired)["r2_target"].endswith(session.id)
+    assert storage.get_session_meta(repaired)["r2_target"].endswith(
+        ":wedding-strip-00001"
+    )
     assert uploads.resume_calls == 1
 
 

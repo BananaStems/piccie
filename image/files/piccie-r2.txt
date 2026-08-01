@@ -12,13 +12,16 @@
 #    restrict it to only the "piccie-photos" bucket.
 # 5. Copy the Account ID, Access Key ID and Secret Access Key below. Cloudflare
 #    shows the secret only once.
-# 6. Save or copy this completed file to the microSD boot drive, confirm it is
+# 6. Optional: add your computer's OpenSSH public key below so remote maintenance
+#    works immediately. This normally starts with "ssh-ed25519". Never paste a
+#    private key here.
+# 7. Save or copy this completed file to the microSD boot drive, confirm it is
 #    present, then safely eject the card and power on Piccie.
-# 7. Choose the Wi-Fi network and enter its password on Piccie's touchscreen.
+# 8. Choose the Wi-Fi network and enter its password on Piccie's touchscreen.
 #    Do not add Wi-Fi credentials to this file.
-# 8. Piccie imports the R2 credentials and removes this readable copy. If import
-#    fails, shut down and read piccie-r2-status.txt on this same drive for the
-#    exact field to correct.
+# 9. Piccie imports the R2 credentials and optional SSH key, then removes this
+#    readable copy. If import fails, shut down and read piccie-r2-status.txt on
+#    this same drive for the exact field to correct.
 #
 # Keep these credentials private. Anyone with them can access this R2 bucket.
 # The bucket stays private. Piccie creates time-limited guest download links.
@@ -28,3 +31,4 @@ ACCESS_KEY_ID=
 SECRET_ACCESS_KEY=
 BUCKET_NAME=piccie-photos
 JURISDICTION=default
+SSH_AUTHORIZED_KEY=

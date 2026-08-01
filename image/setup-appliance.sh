@@ -80,6 +80,11 @@ install -d /etc/systemd/system.conf.d /etc/systemd/journald.conf.d /etc/NetworkM
 install -m 644 "${INSTALL_DIR}/image/files/watchdog.conf" /etc/systemd/system.conf.d/10-watchdog.conf
 install -m 644 "${INSTALL_DIR}/image/files/journald-piccie.conf" /etc/systemd/journald.conf.d/10-volatile.conf
 install -m 644 "${INSTALL_DIR}/image/files/nm-keyfile-path.conf" /etc/NetworkManager/conf.d/00-piccie-keyfile-path.conf
+# NetworkManager receives DNS from DHCP after root has become read-only. Point
+# libc at NetworkManager's writable runtime file instead of leaving a regular
+# /etc/resolv.conf that NetworkManager cannot replace.
+rm -f /etc/resolv.conf
+ln -s /run/NetworkManager/resolv.conf /etc/resolv.conf
 install -d /etc/polkit-1/rules.d
 install -m 644 "${INSTALL_DIR}/image/files/49-piccie-networkmanager.rules" /etc/polkit-1/rules.d/
 

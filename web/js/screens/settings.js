@@ -170,7 +170,10 @@ export async function renderSettingsScreen({ app, state, render, api, escapeHtml
     };
     return;
   }
-  const performance = await api.getPerformanceSettings().catch((error) => ({ error: error.message }));
+  const [performance, access] = await Promise.all([
+    api.getPerformanceSettings().catch((error) => ({ error: error.message })),
+    api.getAccessSettings().catch((error) => ({ error: error.message })),
+  ]);
 
   const settings = data.settings;
   const options = data.options || {};
@@ -206,6 +209,32 @@ export async function renderSettingsScreen({ app, state, render, api, escapeHtml
         <p class="performance-status" id="performance-status"></p>
         <button type="button" class="btn performance-apply" id="performance-apply">Apply & restart</button>
       </div>`;
+  const accessPanel = access.error
+    ? `<p class="error-text">${escapeHtml(access.error)}</p>`
+    : `<div class="access-settings-panel">
+        <form class="access-form" id="operator-pin-form" autocomplete="off">
+          <p class="access-description">Change the PIN used to open the menu and settings.</p>
+          <label class="access-field">
+            <span>New operator PIN</span>
+            <input class="pin-input" id="new-operator-pin" type="text" inputmode="numeric" data-osk-layout="pin" pattern="[0-9]{4}" minlength="4" maxlength="4" autocomplete="off" autocapitalize="none" spellcheck="false" data-1p-ignore="true" data-lpignore="true" required />
+          </label>
+          <label class="access-field">
+            <span>Confirm PIN</span>
+            <input class="pin-input" id="confirm-operator-pin" type="text" inputmode="numeric" data-osk-layout="pin" pattern="[0-9]{4}" minlength="4" maxlength="4" autocomplete="off" autocapitalize="none" spellcheck="false" data-1p-ignore="true" data-lpignore="true" required />
+          </label>
+          <button class="btn btn-secondary" id="operator-pin-save" type="submit">Save PIN</button>
+          <p class="access-status" id="operator-pin-status" role="status"></p>
+        </form>
+        <form class="access-form" id="ssh-access-form" autocomplete="off">
+          <p class="access-description">Add one public key for secure remote maintenance. The private key stays on your computer.</p>
+          <label class="access-field access-field-wide">
+            <span>SSH public key</span>
+            <textarea id="ssh-authorized-key" rows="4" maxlength="1000" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="ssh-ed25519 …">${escapeHtml(access.ssh_authorized_key || "")}</textarea>
+          </label>
+          <button class="btn btn-secondary" id="ssh-access-save" type="submit">Save SSH key</button>
+          <p class="access-status" id="ssh-access-status" role="status"></p>
+        </form>
+      </div>`;
   const appVersion = escapeHtml(state.status?.version || "Unknown");
   const buildId = escapeHtml(state.status?.build || "Unknown");
   const versionPanel = `<div class="version-panel">
@@ -226,6 +255,7 @@ export async function renderSettingsScreen({ app, state, render, api, escapeHtml
       slider({ id: "set-lens", label: "Manual focus", key: "lens_position", value: settings.lens_position, min: 0, max: 10, step: 0.1, rowId: "row-lens", hidden: settings.af_continuous }),
     ]),
     group("System performance", [performancePanel]),
+    group("Operator access", [accessPanel]),
     group("About", [versionPanel]),
   ];
 
@@ -308,6 +338,69 @@ export async function renderSettingsScreen({ app, state, render, api, escapeHtml
       });
       queueUpdate("filter_name", card.dataset.look);
     });
+  });
+
+  const pinForm = document.getElementById("operator-pin-form");
+  pinForm?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const pin = document.getElementById("new-operator-pin").value;
+    const confirmation = document.getElementById("confirm-operator-pin").value;
+    const button = document.getElementById("operator-pin-save");
+    const status = document.getElementById("operator-pin-status");
+    status.classList.remove("error-text");
+    if (!/^\d{4}$/.test(pin)) {
+      status.textContent = "Use exactly 4 digits.";
+      status.classList.add("error-text");
+      return;
+    }
+    if (pin !== confirmation) {
+      status.textContent = "The PINs do not match.";
+      status.classList.add("error-text");
+      return;
+    }
+    button.disabled = true;
+    try {
+      await api.updateOperatorPin(pin);
+      pinForm.reset();
+      status.textContent = "Operator PIN updated.";
+    } catch (error) {
+      status.textContent = error.message;
+      status.classList.add("error-text");
+    } finally {
+      button.disabled = false;
+    }
+  });
+
+  const sshForm = document.getElementById("ssh-access-form");
+  sshForm?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const input = document.getElementById("ssh-authorized-key");
+    const key = input.value.trim();
+    const button = document.getElementById("ssh-access-save");
+    const status = document.getElementById("ssh-access-status");
+    status.classList.remove("error-text");
+    if (!key && access.ssh_key_configured) {
+      const confirmed = await showConfirm({
+        title: "Remove SSH access?",
+        message: "Remote maintenance will stop working until another public key is added here or through piccie-r2.txt.",
+        confirmLabel: "Remove key",
+        danger: true,
+      });
+      if (!confirmed) return;
+    }
+    button.disabled = true;
+    try {
+      const result = await api.updateSshAuthorizedKey(key);
+      access.ssh_key_configured = result.ssh_key_configured;
+      access.ssh_authorized_key = key;
+      input.value = key;
+      status.textContent = key ? "SSH key updated." : "SSH access removed.";
+    } catch (error) {
+      status.textContent = error.message;
+      status.classList.add("error-text");
+    } finally {
+      button.disabled = false;
+    }
   });
 
   const performanceElement = document.querySelector(".performance-panel");

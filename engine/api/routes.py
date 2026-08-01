@@ -11,11 +11,12 @@ import zipfile
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import FileResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, RedirectResponse, Response, StreamingResponse
 
 from engine.atomicio import jpeg_is_intact
 from engine.api.schemas import (
     ActiveEventRequest,
+    AdminPinUpdateRequest,
     AdminUnlockRequest,
     CaptureResponse,
     EventRequest,
@@ -25,6 +26,7 @@ from engine.api.schemas import (
     PerformanceSettingsRequest,
     SessionResponse,
     StatusResponse,
+    SshAuthorizedKeyRequest,
     TemplateResponse,
     WifiConnectRequest,
     WifiNetworkResponse,
@@ -34,11 +36,12 @@ from engine.camera_settings import CAMERA_SETTING_OPTIONS
 from engine.capture_delivery import CaptureDeliveryError
 from engine.composer import (
     _layout_metrics,
+    render_filtered_photo_preview_jpeg,
     render_strip_preview_jpeg,
     strip_dimensions,
 )
 from engine.config import AppConfig, ConfigStore
-from engine.paths import slugify
+from engine.paths import r2_named_strip_stem
 from engine.performance import (
     DEVICE_OPTIONS,
     apply_performance_profile,
@@ -50,6 +53,7 @@ from engine.power import schedule_poweroff
 from engine.provisioning import provision_booth
 from engine.r2 import R2Uploader
 from engine.storage import data_degraded, disk_free_mb, disk_low
+from engine.ssh_access import read_authorized_key, set_authorized_key
 from engine.template_packages import GOOGLE_FONTS, install_template
 from engine.templates import TemplateRegistry
 from engine.version import APP_VERSION, BUILD_ID
@@ -200,6 +204,36 @@ def set_active_event(request: Request, body: ActiveEventRequest) -> dict:
             raise HTTPException(409, "This event has concluded. Edit its end time to launch it again.")
     request.app.state.config_store.set_active_event(body.event_id)
     return {"ok": True, "event_id": body.event_id}
+
+
+@router.get("/settings/access")
+def get_access_settings(request: Request) -> dict:
+    _require_admin(request)
+    key = read_authorized_key()
+    return {
+        "admin_pin_set": request.app.state.config_store.ensure().admin_pin_set,
+        "ssh_authorized_key": key,
+        "ssh_key_configured": bool(key),
+    }
+
+
+@router.put("/settings/access/pin")
+def update_admin_pin(request: Request, body: AdminPinUpdateRequest) -> dict:
+    _require_admin(request)
+    request.app.state.config_store.set_admin_pin(body.pin)
+    token = secrets.token_urlsafe(32)
+    request.app.state.admin_tokens.clear()
+    request.app.state.admin_tokens.add(token)
+    return {"ok": True, "token": token}
+
+
+@router.put("/settings/access/ssh")
+def update_ssh_authorized_key(
+    request: Request, body: SshAuthorizedKeyRequest
+) -> dict:
+    _require_admin(request)
+    key = set_authorized_key(body.ssh_authorized_key)
+    return {"ok": True, "ssh_key_configured": bool(key)}
 
 
 @router.get("/wifi/networks", response_model=list[WifiNetworkResponse])
@@ -459,18 +493,37 @@ def _event_archive(request: Request, event_id: str) -> Path:
     storage = request.app.state.storage
     event = storage.get_event(event_id)
     assert event is not None
-    sessions = sorted(storage.list_event_sessions(event_id), key=lambda item: item.created_at)
-    strips = [Path(session.local_path) / "strip.jpg" for session in sessions]
-    strips = [strip for strip in strips if jpeg_is_intact(strip)]
-    if not strips:
+    sessions = sorted(
+        storage.list_event_sessions(event_id),
+        key=lambda item: item.strip_number,
+    )
+    completed = [
+        session
+        for session in sessions
+        if jpeg_is_intact(Path(session.local_path) / "strip.jpg")
+    ]
+    if not completed:
         raise HTTPException(400, "This event has no completed photo strips.")
     archive = storage.events_dir / event_id / "download-all.zip"
     temporary = archive.with_suffix(".zip.new")
     try:
         with zipfile.ZipFile(temporary, "w", compression=zipfile.ZIP_STORED, allowZip64=True) as bundle:
-            stem = slugify(event.name, max_len=40)
-            for index, strip in enumerate(strips, 1):
-                bundle.write(strip, arcname=f"{stem}-strip-{index:03d}.jpg")
+            for session in completed:
+                session_dir = Path(session.local_path)
+                stem = r2_named_strip_stem(event.name, session.strip_number)
+                bundle.write(
+                    session_dir / "strip.jpg",
+                    arcname=f"strips/{stem}.jpg",
+                )
+                for photo_index in range(1, 4):
+                    photo = session_dir / f"photo-{photo_index}.jpg"
+                    if jpeg_is_intact(photo):
+                        bundle.write(
+                            photo,
+                            arcname=(
+                                f"photos/{stem}-photo-{photo_index:02d}.jpg"
+                            ),
+                        )
         temporary.replace(archive)
     finally:
         temporary.unlink(missing_ok=True)
@@ -496,6 +549,7 @@ def _publish_event(request: Request, event_id: str, regenerate: bool) -> EventSh
             event.date,
             archive,
             previous_token=event.share_token if regenerate else None,
+            event_folder=event.r2_folder,
         )
     except Exception as exc:
         raise HTTPException(502, "Could not publish the event gallery. Check Wi-Fi and try again.") from exc
@@ -702,7 +756,12 @@ def start_session(request: Request, event_id: str) -> SessionResponse:
 
 
 @router.get("/sessions/{session_id}/photos/{photo_index}")
-def get_session_photo(request: Request, session_id: str, photo_index: int):
+def get_session_photo(
+    request: Request,
+    session_id: str,
+    photo_index: int,
+    filtered: bool = False,
+):
     if photo_index not in (1, 2, 3):
         raise HTTPException(400, "photo_index must be 1, 2, or 3")
     session = request.app.state.storage.get_session(session_id)
@@ -711,6 +770,12 @@ def get_session_photo(request: Request, session_id: str, photo_index: int):
     path = Path(session.local_path) / f"photo-{photo_index}.jpg"
     if not path.exists():
         raise HTTPException(404, "Photo not found")
+    if filtered:
+        return Response(
+            content=render_filtered_photo_preview_jpeg(path),
+            media_type="image/jpeg",
+            headers={"Cache-Control": "no-store"},
+        )
     return FileResponse(path)
 
 
@@ -744,6 +809,23 @@ def get_session(request: Request, session_id: str) -> SessionResponse:
     return _session_response(session)
 
 
+@router.delete("/sessions/{session_id}")
+def delete_session(request: Request, session_id: str) -> dict:
+    _require_admin(request)
+    storage = request.app.state.storage
+    session = storage.get_session(session_id)
+    if not session or not (Path(session.local_path) / "strip.jpg").exists():
+        raise HTTPException(404, "Photo strip not found")
+    event = storage.get_event(session.event_id)
+    share_disabled = bool(event and event.share_url)
+    ok, targets = storage.delete_session(session_id)
+    if not ok:
+        raise HTTPException(404, "Photo strip not found")
+    if targets:
+        request.app.state.upload_queue.retry_pending_deletions_async()
+    return {"ok": True, "share_disabled": share_disabled}
+
+
 @router.get("/events/{event_id}/sessions", response_model=list[SessionResponse])
 def list_event_sessions(request: Request, event_id: str) -> list[SessionResponse]:
     storage = request.app.state.storage
@@ -765,6 +847,19 @@ def get_strip(request: Request, session_id: str):
     if not strip.exists():
         raise HTTPException(404, "Strip not ready")
     return FileResponse(strip)
+
+
+@router.get("/d/{session_id}")
+def guest_download(request: Request, session_id: str):
+    """Turn a short LAN QR URL into the verified, time-limited R2 guest page."""
+    session = request.app.state.storage.get_session(session_id)
+    if not session or not session.r2_strip_url:
+        raise HTTPException(404, "Guest download not found")
+    return RedirectResponse(
+        session.r2_strip_url,
+        status_code=307,
+        headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"},
+    )
 
 
 @router.post("/kiosk/heartbeat")
@@ -797,8 +892,17 @@ def qr_code(data: str):
     if not data or len(data) > 2048:
         raise HTTPException(400, "Missing or oversized data")
     import qrcode
+    from qrcode.constants import ERROR_CORRECT_L
 
-    img = qrcode.make(data)
+    qr = qrcode.QRCode(
+        version=None,
+        error_correction=ERROR_CORRECT_L,
+        box_size=8,
+        border=4,
+    )
+    qr.add_data(data)
+    qr.make(fit=True)
+    img = qr.make_image(fill_color="black", back_color="white")
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     return Response(
@@ -881,6 +985,11 @@ def _session_response(session) -> SessionResponse:
         upload_error=session.upload_error,
         upload_attempts=session.upload_attempts,
         r2_strip_url=session.r2_strip_url,
+        guest_qr_url=(
+            f"http://{_lan_ip()}:8080/api/d/{session.id}"
+            if session.r2_strip_url
+            else None
+        ),
         strip_local_url=strip_url,
         photo_local_urls=[
             f"/api/sessions/{session.id}/photos/{index}"

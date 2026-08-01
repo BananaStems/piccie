@@ -18,6 +18,7 @@ ACCESS_KEY_ID=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 SECRET_ACCESS_KEY=cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
 BUCKET_NAME=piccie-photos
 JURISDICTION=default
+SSH_AUTHORIZED_KEY=ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAID7xmMhz1/FKQxq0ML54lMRKG/th7+UEMiaq7HLEJHNC test-deploy
 EOF
 
 cat >"${INVALID}" <<'EOF'
@@ -26,6 +27,7 @@ ACCESS_KEY_ID=
 SECRET_ACCESS_KEY=
 BUCKET_NAME=piccie-photos
 JURISDICTION=default
+SSH_AUTHORIZED_KEY=
 EOF
 
 PICCIE_R2_FILE="${VALID}" "${REPO_ROOT}/image/copy-r2-to-card.sh" "${VOLUME}" >/dev/null

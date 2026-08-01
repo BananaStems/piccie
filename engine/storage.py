@@ -12,6 +12,12 @@ from pathlib import Path
 
 from engine.atomicio import jpeg_is_intact, write_json_atomic
 from engine.config import DATA_DIR
+from engine.paths import (
+    r2_named_event_folder,
+    r2_named_session_target,
+    r2_named_strip_stem,
+    r2_session_target,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +73,7 @@ class Event:
     date_separator: str = "/"
     share_url: str | None = None
     share_token: str | None = None
+    r2_folder: str = ""
 
     def strip_line1(self) -> str:
         return self.line1 or self.name
@@ -98,6 +105,7 @@ class Session:
     upload_attempts: int = 0
     upload_updated_at: str | None = None
     finalized_at: str | None = None
+    strip_number: int = 0
 
 
 class Storage:
@@ -132,6 +140,8 @@ class Storage:
                     photo_count INTEGER NOT NULL DEFAULT 0,
                     share_url TEXT,
                     share_token TEXT,
+                    r2_folder TEXT NOT NULL DEFAULT '',
+                    next_strip_number INTEGER NOT NULL DEFAULT 1,
                     created_at TEXT NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS sessions (
@@ -142,6 +152,7 @@ class Storage:
                     local_path TEXT NOT NULL,
                     upload_status TEXT NOT NULL DEFAULT 'pending',
                     finalized_at TEXT,
+                    strip_number INTEGER,
                     FOREIGN KEY (event_id) REFERENCES events(id)
                 );
                 CREATE TABLE IF NOT EXISTS r2_deletions (
@@ -168,6 +179,32 @@ class Storage:
             conn.execute("ALTER TABLE events ADD COLUMN share_url TEXT")
         if "share_token" not in cols:
             conn.execute("ALTER TABLE events ADD COLUMN share_token TEXT")
+        if "r2_folder" not in cols:
+            conn.execute("ALTER TABLE events ADD COLUMN r2_folder TEXT NOT NULL DEFAULT ''")
+        if "next_strip_number" not in cols:
+            conn.execute(
+                "ALTER TABLE events ADD COLUMN next_strip_number INTEGER NOT NULL DEFAULT 1"
+            )
+        used_folders = {
+            row[0]
+            for row in conn.execute(
+                "SELECT r2_folder FROM events WHERE r2_folder != ''"
+            )
+        }
+        for row in conn.execute(
+            "SELECT id, name, date FROM events WHERE r2_folder = '' ORDER BY created_at, id"
+        ).fetchall():
+            base = r2_named_event_folder(row["name"], row["date"])
+            folder = base
+            suffix = 2
+            while folder in used_folders:
+                folder = f"{base}-{suffix}"
+                suffix += 1
+            conn.execute(
+                "UPDATE events SET r2_folder = ? WHERE id = ?",
+                (folder, row["id"]),
+            )
+            used_folders.add(folder)
         # The abandoned scheduled-email prototype briefly stored host addresses.
         # Sharing no longer needs them, so remove any retained personal data.
         if "host_email" in cols:
@@ -185,6 +222,56 @@ class Storage:
             conn.execute("ALTER TABLE sessions ADD COLUMN upload_updated_at TEXT")
         if "finalized_at" not in cols:
             conn.execute("ALTER TABLE sessions ADD COLUMN finalized_at TEXT")
+        if "strip_number" not in cols:
+            conn.execute("ALTER TABLE sessions ADD COLUMN strip_number INTEGER")
+        event_ids = [row[0] for row in conn.execute("SELECT id FROM events")]
+        for event_id in event_ids:
+            used_numbers = {
+                row[0]
+                for row in conn.execute(
+                    """
+                    SELECT strip_number FROM sessions
+                    WHERE event_id = ? AND strip_number IS NOT NULL AND strip_number > 0
+                    """,
+                    (event_id,),
+                )
+            }
+            next_number = 1
+            rows = conn.execute(
+                """
+                SELECT id FROM sessions
+                WHERE event_id = ? AND (strip_number IS NULL OR strip_number <= 0)
+                ORDER BY created_at, rowid
+                """,
+                (event_id,),
+            ).fetchall()
+            for row in rows:
+                while next_number in used_numbers:
+                    next_number += 1
+                conn.execute(
+                    "UPDATE sessions SET strip_number = ? WHERE id = ?",
+                    (next_number, row["id"]),
+                )
+                used_numbers.add(next_number)
+        conn.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS sessions_event_strip_number
+            ON sessions(event_id, strip_number)
+            """
+        )
+        conn.execute(
+            """
+            UPDATE events
+            SET next_strip_number = MAX(
+                next_strip_number,
+                COALESCE(
+                    (SELECT MAX(strip_number) + 1 FROM sessions
+                     WHERE sessions.event_id = events.id),
+                    1
+                )
+            )
+            """
+        )
         conn.execute(
             """
             UPDATE sessions
@@ -223,12 +310,13 @@ class Storage:
         event_dir = self.events_dir / event_id
         event_dir.mkdir(parents=True, exist_ok=True)
         with self._connect() as conn:
+            r2_folder = self._available_r2_folder(conn, name, date)
             conn.execute(
                 """
-                INSERT INTO events (id, name, line1, line2, date, ends_at, date_separator, template_id, photo_count, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
+                INSERT INTO events (id, name, line1, line2, date, ends_at, date_separator, template_id, photo_count, r2_folder, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
                 """,
-                (event_id, name, line1, line2, date, ends_at, date_separator, template_id, created_at),
+                (event_id, name, line1, line2, date, ends_at, date_separator, template_id, r2_folder, created_at),
             )
         return Event(
             id=event_id,
@@ -240,7 +328,27 @@ class Storage:
             date_separator=date_separator,
             template_id=template_id,
             photo_count=0,
+            r2_folder=r2_folder,
         )
+
+    @staticmethod
+    def _available_r2_folder(
+        conn: sqlite3.Connection,
+        name: str,
+        date: str,
+        *,
+        exclude_event_id: str | None = None,
+    ) -> str:
+        base = r2_named_event_folder(name, date)
+        candidate = base
+        suffix = 2
+        while conn.execute(
+            "SELECT 1 FROM events WHERE r2_folder = ? AND id != COALESCE(?, '')",
+            (candidate, exclude_event_id),
+        ).fetchone():
+            candidate = f"{base}-{suffix}"
+            suffix += 1
+        return candidate
 
     def create_session(self, event_id: str) -> Session:
         session_id = str(uuid.uuid4())
@@ -248,9 +356,26 @@ class Storage:
         session_dir = self.events_dir / event_id / "sessions" / session_id
         session_dir.mkdir(parents=True, exist_ok=True)
         with self._connect() as conn:
+            row = conn.execute(
+                """
+                UPDATE events
+                SET next_strip_number = next_strip_number + 1
+                WHERE id = ?
+                RETURNING next_strip_number - 1
+                """,
+                (event_id,),
+            ).fetchone()
+            if not row:
+                shutil.rmtree(session_dir, ignore_errors=True)
+                raise ValueError("Event not found")
+            strip_number = int(row[0])
             conn.execute(
-                "INSERT INTO sessions (id, event_id, created_at, local_path, upload_status) VALUES (?, ?, ?, ?, 'pending')",
-                (session_id, event_id, created_at, str(session_dir)),
+                """
+                INSERT INTO sessions
+                    (id, event_id, created_at, local_path, upload_status, strip_number)
+                VALUES (?, ?, ?, ?, 'pending', ?)
+                """,
+                (session_id, event_id, created_at, str(session_dir), strip_number),
             )
         return Session(
             id=session_id,
@@ -259,6 +384,7 @@ class Storage:
             r2_strip_url=None,
             local_path=str(session_dir),
             upload_status="pending",
+            strip_number=strip_number,
         )
 
     def get_session(self, session_id: str) -> Session | None:
@@ -360,9 +486,32 @@ class Storage:
         resolved_template_id = template_id or event.template_id
         resolved_ends_at = ends_at or event.ends_at
         with self._connect() as conn:
+            r2_folder = event.r2_folder
+            if event.photo_count == 0 and not event.share_url:
+                r2_folder = self._available_r2_folder(
+                    conn,
+                    name,
+                    date,
+                    exclude_event_id=event_id,
+                )
             conn.execute(
-                "UPDATE events SET name = ?, line1 = ?, line2 = ?, date = ?, ends_at = ?, date_separator = ?, template_id = ? WHERE id = ?",
-                (name, line1, line2, date, resolved_ends_at, date_separator, resolved_template_id, event_id),
+                """
+                UPDATE events
+                SET name = ?, line1 = ?, line2 = ?, date = ?, ends_at = ?,
+                    date_separator = ?, template_id = ?, r2_folder = ?
+                WHERE id = ?
+                """,
+                (
+                    name,
+                    line1,
+                    line2,
+                    date,
+                    resolved_ends_at,
+                    date_separator,
+                    resolved_template_id,
+                    r2_folder,
+                    event_id,
+                ),
             )
         return Event(
             id=event_id,
@@ -376,6 +525,7 @@ class Storage:
             photo_count=event.photo_count,
             share_url=event.share_url,
             share_token=event.share_token,
+            r2_folder=r2_folder,
         )
 
     def set_event_share(
@@ -396,18 +546,38 @@ class Storage:
 
     def clear_event_photos(self, event_id: str) -> tuple[bool, list[str]]:
         with self._connect() as conn:
-            row = conn.execute("SELECT id FROM events WHERE id = ?", (event_id,)).fetchone()
+            row = conn.execute(
+                "SELECT id, r2_folder, share_token FROM events WHERE id = ?",
+                (event_id,),
+            ).fetchone()
             if not row:
                 return False, []
             session_rows = conn.execute(
-                "SELECT event_id, local_path FROM sessions WHERE event_id = ?",
+                """
+                SELECT sessions.id, sessions.event_id, sessions.local_path,
+                       sessions.strip_number, events.name, events.r2_folder
+                FROM sessions JOIN events ON events.id = sessions.event_id
+                WHERE sessions.event_id = ?
+                """,
                 (event_id,),
             ).fetchall()
             targets = self._collect_r2_targets(session_rows)
             targets.append(f"event-content:{event_id}")
+            targets.append(f"named-event-archive:{event_id}:{row['r2_folder']}")
+            if row["share_token"]:
+                targets.append(
+                    f"event-share:{event_id}:{row['share_token']}"
+                )
             self._record_r2_deletions(conn, targets)
             conn.execute("DELETE FROM sessions WHERE event_id = ?", (event_id,))
-            conn.execute("UPDATE events SET photo_count = 0 WHERE id = ?", (event_id,))
+            conn.execute(
+                """
+                UPDATE events
+                SET photo_count = 0, share_url = NULL, share_token = NULL
+                WHERE id = ?
+                """,
+                (event_id,),
+            )
         for session_row in session_rows:
             session_dir = Path(session_row["local_path"])
             if session_dir.exists():
@@ -415,19 +585,80 @@ class Storage:
         sessions_dir = self.events_dir / event_id / "sessions"
         if sessions_dir.exists():
             shutil.rmtree(sessions_dir, ignore_errors=True)
+        (self.events_dir / event_id / "download-all.zip").unlink(missing_ok=True)
+        return True, targets
+
+    def delete_session(self, session_id: str) -> tuple[bool, list[str]]:
+        """Permanently remove one session while keeping local and R2 state aligned."""
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT sessions.id, sessions.event_id, sessions.local_path,
+                       sessions.finalized_at, sessions.strip_number,
+                       events.name, events.r2_folder,
+                       events.share_url, events.share_token
+                FROM sessions
+                JOIN events ON events.id = sessions.event_id
+                WHERE sessions.id = ?
+                """,
+                (session_id,),
+            ).fetchone()
+            if not row:
+                return False, []
+
+            event_id = row["event_id"]
+            targets = [self._r2_target_for_session_row(row)]
+            if row["share_url"] or row["share_token"]:
+                targets.append(f"event-archive:{event_id}")
+                targets.append(
+                    f"named-event-archive:{event_id}:{row['r2_folder']}"
+                )
+            if row["share_token"]:
+                targets.append(f"event-share:{event_id}:{row['share_token']}")
+            self._record_r2_deletions(conn, targets)
+            conn.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
+            if row["finalized_at"]:
+                conn.execute(
+                    """
+                    UPDATE events
+                    SET photo_count = MAX(photo_count - 1, 0),
+                        share_url = NULL,
+                        share_token = NULL
+                    WHERE id = ?
+                    """,
+                    (event_id,),
+                )
+            else:
+                conn.execute(
+                    "UPDATE events SET share_url = NULL, share_token = NULL WHERE id = ?",
+                    (event_id,),
+                )
+
+        session_dir = Path(row["local_path"])
+        if session_dir.exists():
+            shutil.rmtree(session_dir, ignore_errors=True)
+        (self.events_dir / event_id / "download-all.zip").unlink(missing_ok=True)
         return True, targets
 
     def delete_event(self, event_id: str) -> tuple[bool, list[str]]:
         with self._connect() as conn:
-            row = conn.execute("SELECT id FROM events WHERE id = ?", (event_id,)).fetchone()
+            row = conn.execute(
+                "SELECT id, r2_folder FROM events WHERE id = ?", (event_id,)
+            ).fetchone()
             if not row:
                 return False, []
             session_rows = conn.execute(
-                "SELECT event_id, local_path FROM sessions WHERE event_id = ?",
+                """
+                SELECT sessions.id, sessions.event_id, sessions.local_path,
+                       sessions.strip_number, events.name, events.r2_folder
+                FROM sessions JOIN events ON events.id = sessions.event_id
+                WHERE sessions.event_id = ?
+                """,
                 (event_id,),
             ).fetchall()
             targets = self._collect_r2_targets(session_rows)
             targets.append(f"event:{event_id}")
+            targets.append(f"named-event:{event_id}:{row['r2_folder']}")
             self._record_r2_deletions(conn, targets)
             conn.execute("DELETE FROM sessions WHERE event_id = ?", (event_id,))
             conn.execute("DELETE FROM events WHERE id = ?", (event_id,))
@@ -437,18 +668,32 @@ class Storage:
         return True, targets
 
     def _collect_r2_targets(self, session_rows: list[sqlite3.Row]) -> list[str]:
-        targets: list[str] = []
-        for session_row in session_rows:
-            meta_path = Path(session_row["local_path"]) / "meta.json"
-            meta: dict = {}
-            try:
-                meta = json.loads(meta_path.read_text())
-                target = meta.get("r2_target")
-            except (OSError, json.JSONDecodeError):
-                target = None
-            if target:
-                targets.append(target)
+        targets = [self._r2_target_for_session_row(row) for row in session_rows]
         return list(dict.fromkeys(targets))
+
+    @staticmethod
+    def _r2_target_for_session_row(session_row: sqlite3.Row) -> str:
+        keys = session_row.keys()
+        if "local_path" in keys:
+            try:
+                meta = json.loads(
+                    (Path(session_row["local_path"]) / "meta.json").read_text()
+                )
+                if meta.get("r2_target"):
+                    return meta["r2_target"]
+            except (OSError, json.JSONDecodeError):
+                pass
+        if all(key in keys for key in ("r2_folder", "name", "strip_number")):
+            return r2_named_session_target(
+                session_row["event_id"],
+                session_row["id"],
+                session_row["r2_folder"],
+                r2_named_strip_stem(
+                    session_row["name"],
+                    int(session_row["strip_number"]),
+                ),
+            )
+        return r2_session_target(session_row["event_id"], session_row["id"])
 
     @staticmethod
     def _record_r2_deletions(conn: sqlite3.Connection, targets: list[str]) -> None:
@@ -604,8 +849,8 @@ class Storage:
                     pass
             session_dir = Path(session.local_path)
             strip = session_dir / "strip.jpg"
-            # R2 publishes only the composed strip. Source photos may already have
-            # been reclaimed; they are not required to resume a guest upload.
+            # Legacy jobs publish only the strip. New named-layout jobs validate
+            # their source photos in UploadQueue before any R2 object is exposed.
             if not strip.exists():
                 continue
             if not jpeg_is_intact(strip):
@@ -718,6 +963,7 @@ class Storage:
             photo_count=row["photo_count"],
             share_url=row["share_url"] if "share_url" in keys else None,
             share_token=row["share_token"] if "share_token" in keys else None,
+            r2_folder=row["r2_folder"] if "r2_folder" in keys else "",
         )
 
     @staticmethod
@@ -736,4 +982,9 @@ class Storage:
                 row["upload_updated_at"] if "upload_updated_at" in keys else None
             ),
             finalized_at=row["finalized_at"] if "finalized_at" in keys else None,
+            strip_number=(
+                int(row["strip_number"])
+                if "strip_number" in keys and row["strip_number"] is not None
+                else 0
+            ),
         )

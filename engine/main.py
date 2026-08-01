@@ -94,7 +94,7 @@ def lan_request_allowed(host: str, path: str) -> bool:
         "/js/studio.js",
         "/assets/piccie-wordmark.svg",
     }
-    prefixes = ("/fonts/", "/api/studio/")
+    prefixes = ("/fonts/", "/api/studio/", "/api/d/")
     return path in exact or path.startswith(prefixes)
 
 

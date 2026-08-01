@@ -46,11 +46,20 @@ def test_delete_requested_during_upload_wins(tmp_path, monkeypatch):
     class RacingUploader:
         deleted = []
 
-        def upload_session(self, _session_dir, _event_id, _session_id):
+        def upload_session(
+            self,
+            _session_dir,
+            _event_id,
+            _session_id,
+            *,
+            cloud_target=None,
+        ):
+            assert cloud_target == target
             ok, targets = storage.clear_event_photos(event.id)
             assert ok and targets == [
                 target,
                 f"event-content:{event.id}",
+                f"named-event-archive:{event.id}:{event.r2_folder}",
             ]
             return "https://photos.example.com/strip"
 
@@ -68,8 +77,62 @@ def test_delete_requested_during_upload_wins(tmp_path, monkeypatch):
     )
 
     assert uploader.deleted == [target]
-    assert storage.pending_r2_deletions() == [f"event-content:{event.id}"]
+    assert storage.pending_r2_deletions() == [
+        f"event-content:{event.id}",
+        f"named-event-archive:{event.id}:{event.r2_folder}",
+    ]
     assert storage.get_session(session.id) is None
+
+
+def test_named_upload_never_publishes_without_all_original_photos(tmp_path, monkeypatch):
+    local = tmp_path / "local.json"
+    local.write_text(
+        json.dumps(
+            {
+                "r2": {
+                    "account_id": "acct",
+                    "access_key": "key",
+                    "secret_key": "secret",
+                    "bucket": "photos",
+                }
+            }
+        )
+    )
+    monkeypatch.setattr("engine.config.LOCAL_CONFIG_PATH", local)
+    store = ConfigStore(tmp_path / "config.json")
+    store.ensure()
+    storage = Storage(tmp_path / "piccie.db", tmp_path / "events")
+    event = storage.create_event("Wedding", "2026-08-01", "classic")
+    session = storage.create_session(event.id)
+    Image.new("RGB", (2, 2)).save(Path(session.local_path) / "strip.jpg")
+    target = (
+        f"named-event-session:{event.id}:{session.id}:"
+        f"{event.r2_folder}:wedding-strip-00001"
+    )
+    calls = []
+    uploader = type(
+        "UploaderStub",
+        (),
+        {"upload_session": lambda self, *args, **kwargs: calls.append((args, kwargs))},
+    )()
+    upload_queue = UploadQueue.__new__(UploadQueue)
+    upload_queue.storage = storage
+    upload_queue.config_store = store
+    upload_queue._get_uploader = lambda _config: uploader
+
+    upload_queue._process(
+        UploadJob(
+            session.id,
+            event.id,
+            Path(session.local_path),
+            cloud_target=target,
+        )
+    )
+
+    assert calls == []
+    failed = storage.get_session(session.id)
+    assert failed.upload_status == "corrupt"
+    assert "photo-1.jpg" in failed.upload_error
 
 
 def test_worker_persists_one_failure_without_immediate_retry_storm(tmp_path):
@@ -168,6 +231,45 @@ def test_cloud_health_fails_closed_then_recovers(tmp_path, monkeypatch):
     assert upload_queue.cloud_health == (True, None)
 
 
+def test_rescan_retries_failed_cloud_health_without_reboot():
+    upload_queue = UploadQueue.__new__(UploadQueue)
+    upload_queue._cloud_lock = threading.Lock()
+    upload_queue._cloud_reachable = False
+    upload_queue._cloud_error = "Wi-Fi was not ready"
+    calls = []
+
+    upload_queue.check_cloud_health = lambda: (
+        calls.append(("health", None)),
+        setattr(upload_queue, "_cloud_reachable", True),
+    )
+    upload_queue.resume_pending = lambda: calls.append(("uploads", None))
+    upload_queue.retry_pending_deletions = lambda: calls.append(("deletions", None))
+    upload_queue.storage = type(
+        "StorageStub",
+        (),
+        {"prune_abandoned_sessions": lambda self: calls.append(("prune", None))},
+    )()
+
+    # Exit after the successful retry reaches the normal 30-second cadence.
+    def stop_on_normal_cadence(seconds):
+        calls.append(("wait", seconds))
+        return seconds == 30
+
+    upload_queue._stop_event = type(
+        "StopStub", (), {"wait": staticmethod(stop_on_normal_cadence)}
+    )()
+    upload_queue._rescan_loop()
+
+    assert calls == [
+        ("wait", 5),
+        ("health", None),
+        ("uploads", None),
+        ("deletions", None),
+        ("prune", None),
+        ("wait", 30),
+    ]
+
+
 def test_event_deletions_wait_for_inflight_upload():
     upload_queue = UploadQueue.__new__(UploadQueue)
     upload_queue._inflight_lock = threading.Lock()
@@ -178,5 +280,6 @@ def test_event_deletions_wait_for_inflight_upload():
     )
     assert upload_queue._deletion_conflicts_with_upload("event-share:event-1:token")
     assert upload_queue._deletion_conflicts_with_upload("event-content:event-1")
+    assert upload_queue._deletion_conflicts_with_upload("event-archive:event-1")
     assert upload_queue._deletion_conflicts_with_upload("event:event-1")
     assert not upload_queue._deletion_conflicts_with_upload("event:event-2")

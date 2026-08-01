@@ -24,17 +24,29 @@ Piccie imports it once and creates seven-day signed guest links without a
 Worker, OAuth client, GitHub connection or public bucket. Wi-Fi is configured
 separately on Piccie's touchscreen during first-time setup.
 
+R2 media is organised by event name and date. For example, an event named
+“Sarah & James” on 14 June 2026 uses `sarah-james-2026-06-14/`, with finished
+strips under `strips/` and the three original captures under `photos/`. Strip
+numbers are permanent five-digit identifiers such as
+`sarah-james-strip-00001.jpg`. From the event gallery, **Share event** displays
+a QR code whose **Download all photos** action transfers one ZIP containing
+both folders.
+
 ## Before the first boot
 
 1. Flash the Piccie image with Raspberry Pi Imager and skip its operating-system
    customisation options.
 2. Reinsert the microSD card into your computer and open its visible boot drive.
 3. Complete the included `piccie-r2.txt` template with your Cloudflare R2
-   credentials, or copy a previously completed file onto the boot drive. The
-   filename must remain exactly `piccie-r2.txt`.
+   credentials and, optionally, your computer's SSH public key—or copy a
+   previously completed file onto the boot drive. The filename must remain
+   exactly `piccie-r2.txt`. Never put an SSH private key in this file.
 4. Safely eject the card and boot Piccie. Choose the Wi-Fi network and enter its
    password on the Piccie touchscreen; Wi-Fi details do not belong in the R2
    file.
+
+The four-digit operator PIN and SSH public key can both be changed later under **Settings
+→ Operator access**.
 
 ## Get started
 

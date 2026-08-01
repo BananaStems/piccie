@@ -85,6 +85,15 @@ def test_deploy_pushes_release_and_reloads_kiosk(tmp_path):
     assert "Deployed " in result.stdout
 
 
+def test_deploy_archive_excludes_macos_metadata():
+    deploy = SCRIPT.read_text()
+    updater = (ROOT / "image" / "piccie-update.sh").read_text()
+
+    assert "COPYFILE_DISABLE=1 tar --no-xattrs" in deploy
+    assert "--exclude='._*'" in deploy
+    assert 'part.startswith("._")' in updater
+
+
 def test_updater_extracts_as_pi_and_has_only_narrow_restart_privilege():
     updater = (ROOT / "image" / "piccie-update.sh").read_text()
     restart_helper = (ROOT / "image" / "piccie-restart-engine").read_text()

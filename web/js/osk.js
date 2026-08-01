@@ -66,7 +66,7 @@ export function rowsForLayout(name) {
   return textRows();
 }
 
-export function normalizePinValue(value, maxLength = 8) {
+export function normalizePinValue(value, maxLength = 4) {
   return String(value).replace(/\D/g, "").slice(0, maxLength);
 }
 
@@ -311,7 +311,7 @@ export function initOnScreenKeyboard() {
     "input",
     (e) => {
       if (!e.target?.classList?.contains("pin-input")) return;
-      const sanitized = normalizePinValue(e.target.value, e.target.maxLength || 8);
+      const sanitized = normalizePinValue(e.target.value, e.target.maxLength || 4);
       if (sanitized !== e.target.value) e.target.value = sanitized;
     },
     true,

@@ -153,7 +153,8 @@ export function renderAdminScreen({
 
 function galleryQrMarkup(session, escapeHtml) {
   if (session?.r2_strip_url) {
-    return `<img class="qr-code" src="/api/qr?data=${encodeURIComponent(session.r2_strip_url)}" alt="QR code to download this photo strip" /><p>Scan to download</p>`;
+    const qrUrl = session.guest_qr_url || session.r2_strip_url;
+    return `<img class="qr-code" src="/api/qr?data=${encodeURIComponent(qrUrl)}" alt="QR code to download this photo strip" /><p>Scan to download</p>`;
   }
   if (session?.upload_status === "failed" || session?.upload_status === "corrupt") {
     return `<p class="error-text">Upload failed</p><p class="subtitle">${escapeHtml(session.upload_error || "Piccie will retry automatically.")}</p>`;
@@ -161,7 +162,7 @@ function galleryQrMarkup(session, escapeHtml) {
   return `<p class="subtitle">Upload pending</p>`;
 }
 
-export function renderGalleryScreen({ app, state, render, api, escapeHtml }) {
+export function renderGalleryScreen({ app, state, render, api, escapeHtml, showConfirm }) {
   const event = state.galleryEvent;
   if (!event) {
     state.view = "admin";
@@ -179,9 +180,12 @@ export function renderGalleryScreen({ app, state, render, api, escapeHtml }) {
       ${sessions.length === 0 ? `<div class="empty-state"><p>No photo strips yet</p></div>` : `
         <div class="gallery-body">
           <div class="gallery-grid drag-scroll">
-            ${sessions.map((session, index) => `<button class="gallery-thumb${session.id === selected?.id ? " selected" : ""}" type="button" data-session="${session.id}" aria-label="View photo strip ${sessions.length - index}" aria-pressed="${session.id === selected?.id}">
-              ${session.photo_local_urls.map((url, photoIndex) => `<img src="${url}" alt="Photo ${photoIndex + 1} from strip ${sessions.length - index}" draggable="false" />`).join("")}
-            </button>`).join("")}
+            ${sessions.map((session, index) => `<div class="gallery-thumb-row">
+              <button class="gallery-thumb${session.id === selected?.id ? " selected" : ""}" type="button" data-session="${session.id}" aria-label="View photo strip ${sessions.length - index}" aria-pressed="${session.id === selected?.id}">
+                ${session.photo_local_urls.map((url, photoIndex) => `<img src="${url}" alt="Photo ${photoIndex + 1} from strip ${sessions.length - index}" draggable="false" />`).join("")}
+              </button>
+              <button class="gallery-delete" type="button" data-delete-session="${session.id}" aria-label="Delete photo strip ${sessions.length - index}">Delete</button>
+            </div>`).join("")}
           </div>
           <div class="gallery-detail">
             <div class="gallery-strip-panel"><img src="${selected.strip_local_url}" alt="Selected photo strip" /></div>
@@ -233,17 +237,60 @@ export function renderGalleryScreen({ app, state, render, api, escapeHtml }) {
       app.querySelector(".gallery-qr-panel").innerHTML = galleryQrMarkup(next, escapeHtml);
     };
   });
+  app.querySelectorAll(".gallery-delete").forEach((button) => {
+    button.onclick = async () => {
+      const sessionId = button.dataset.deleteSession;
+      const sessionIndex = sessions.findIndex((item) => item.id === sessionId);
+      if (sessionIndex < 0) return;
+      const shared = Boolean(state.galleryEvent.share_url);
+      const confirmed = await showConfirm({
+        title: "Delete this strip?",
+        message: shared
+          ? "This permanently removes the strip from Piccie and R2. The existing event gallery link will be disabled until you share the event again."
+          : "This permanently removes the strip from Piccie and R2. This cannot be undone.",
+        confirmLabel: "Delete strip",
+        danger: true,
+      });
+      if (!confirmed) return;
+      button.disabled = true;
+      button.textContent = "Deleting…";
+      try {
+        const result = await api.deleteSession(sessionId);
+        const remaining = sessions.filter((item) => item.id !== sessionId);
+        state.gallerySessions = remaining;
+        if (state.selectedGallerySession?.id === sessionId) {
+          state.selectedGallerySession = remaining[Math.min(sessionIndex, remaining.length - 1)] || null;
+        }
+        state.galleryEvent.photo_count = Math.max(0, state.galleryEvent.photo_count - 1);
+        if (result.share_disabled) state.galleryEvent.share_url = null;
+        const stored = state.events.find((item) => item.id === state.galleryEvent.id);
+        if (stored) {
+          stored.photo_count = state.galleryEvent.photo_count;
+          if (result.share_disabled) stored.share_url = null;
+        }
+        render();
+      } catch (error) {
+        button.disabled = false;
+        button.textContent = "Delete";
+        showGalleryError(error.message);
+      }
+    };
+  });
 
-  function showShareError(message) {
+  function showGalleryError(message, title = "Could not delete strip") {
     const overlay = document.createElement("div");
     overlay.className = "confirm-overlay";
     overlay.innerHTML = `<section class="confirm-panel" role="alertdialog" aria-modal="true">
-      <h2 class="confirm-title">Could not share event</h2>
+      <h2 class="confirm-title">${escapeHtml(title)}</h2>
       <p class="confirm-message">${escapeHtml(message)}</p>
       <div class="confirm-actions"><button class="btn" type="button">Done</button></div>
     </section>`;
     overlay.querySelector("button").onclick = () => overlay.remove();
     document.getElementById("booth-frame").appendChild(overlay);
+  }
+
+  function showShareError(message) {
+    showGalleryError(message, "Could not share event");
   }
 
   function showEventShare(url) {
@@ -253,7 +300,7 @@ export function renderGalleryScreen({ app, state, render, api, escapeHtml }) {
       <div class="event-share-copy">
         <p class="setup-eyebrow">Event gallery</p>
         <h2 id="event-share-title">Ready to share</h2>
-        <p>Scan this code or copy the private link.</p>
+        <p>Scan this code to download every strip and original photo, or copy the private link.</p>
         <code id="event-share-url">${escapeHtml(url)}</code>
         <p class="event-share-status" id="event-share-status" role="status"></p>
       </div>

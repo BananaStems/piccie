@@ -50,7 +50,12 @@ trap cleanup EXIT
 mkdir -p "${STAGE}"
 rsync -a engine web templates scripts requirements.txt constraints.txt README.md VERSION "${STAGE}/"
 printf '%s\n' "${RELEASE_ID}" > "${STAGE}/BUILD"
-tar -C "${STAGE}" -czf "${ARCHIVE}" .
+# macOS stores extended attributes as AppleDouble `._*` files when creating a
+# portable archive. They are not application files and Python correctly rejects
+# them as source, so disable metadata copying and exclude the known wrappers.
+COPYFILE_DISABLE=1 tar --no-xattrs \
+  --exclude='._*' --exclude='.DS_Store' --exclude='__MACOSX' \
+  -C "${STAGE}" -czf "${ARCHIVE}" .
 
 ssh "${SSH_ARGS[@]}" "${HOST}" 'mkdir -p /data/app/incoming'
 REMOTE="/data/app/incoming/${RELEASE_ID}.tar.gz"

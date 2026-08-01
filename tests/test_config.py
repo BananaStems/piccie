@@ -42,7 +42,7 @@ def test_admin_pin_is_hashed_and_verifiable(store):
     assert "2468" not in store.path.read_text()
 
 
-@pytest.mark.parametrize("pin", ["123", "123456789", "12ab"])
+@pytest.mark.parametrize("pin", ["123", "12345", "123456789", "12ab"])
 def test_admin_pin_validation(store, pin):
     with pytest.raises(ValueError):
         store.set_admin_pin(pin)

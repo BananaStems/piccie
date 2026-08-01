@@ -55,8 +55,8 @@ export const api = {
   listEventSessions: (id) => request(`/events/${id}/sessions`),
   updateEvent: (id, data) => request(`/events/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
   getEventShare: (id) => request(`/events/${id}/share`),
-  createEventShare: (id) => request(`/events/${id}/share`, { method: "POST", timeoutMs: 120000 }),
-  regenerateEventShare: (id) => request(`/events/${id}/share/regenerate`, { method: "POST", timeoutMs: 120000 }),
+  createEventShare: (id) => request(`/events/${id}/share`, { method: "POST", timeoutMs: 900000 }),
+  regenerateEventShare: (id) => request(`/events/${id}/share/regenerate`, { method: "POST", timeoutMs: 900000 }),
   disableEventShare: (id) => request(`/events/${id}/share`, { method: "DELETE" }),
   clearEventPhotos: (id) => request(`/events/${id}/clear-photos`, { method: "POST" }),
   deleteEvent: (id) => request(`/events/${id}`, { method: "DELETE" }),
@@ -86,6 +86,20 @@ export const api = {
   getPerformanceSettings: () => request("/settings/performance"),
   updatePerformanceSettings: (data) =>
     request("/settings/performance", { method: "PUT", body: JSON.stringify(data) }),
+  getAccessSettings: () => request("/settings/access"),
+  updateOperatorPin: async (pin) => {
+    const result = await request("/settings/access/pin", {
+      method: "PUT",
+      body: JSON.stringify({ pin }),
+    });
+    adminToken = result.token;
+    return result;
+  },
+  updateSshAuthorizedKey: (sshAuthorizedKey) =>
+    request("/settings/access/ssh", {
+      method: "PUT",
+      body: JSON.stringify({ ssh_authorized_key: sshAuthorizedKey }),
+    }),
   shutdown: () => request("/system/shutdown", { method: "POST" }),
   startSession: (eventId) =>
     request(`/events/${eventId}/sessions`, { method: "POST", timeoutMs: 20000 }),
@@ -94,6 +108,7 @@ export const api = {
   finalize: (sessionId) =>
     request(`/sessions/${sessionId}/finalize`, { method: "POST", timeoutMs: 60000 }),
   getSession: (sessionId) => request(`/sessions/${sessionId}`),
+  deleteSession: (sessionId) => request(`/sessions/${sessionId}`, { method: "DELETE" }),
   photoUrl: (sessionId, index) => `/api/sessions/${sessionId}/photos/${index}`,
   previewUrl: (templateId, line1, date, line2 = "", dateSeparator = "/") => {
     const params = new URLSearchParams({

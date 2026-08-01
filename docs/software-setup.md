@@ -185,10 +185,16 @@ If you are not using the helper:
    lines in `piccie-r2.txt`. Cloudflare shows the secret only once.
 6. Leave `JURISDICTION=default` unless the bucket was explicitly created in the
    EU or FedRAMP jurisdiction.
-7. Save or copy the completed file to the top level of the microSD boot drive,
+7. Optional but recommended for remote maintenance: generate a dedicated SSH
+   key on your computer, then put only its `.pub` contents after
+   `SSH_AUTHORIZED_KEY=`. For example, run
+   `ssh-keygen -t ed25519 -f ~/.ssh/piccie_ed25519 -C piccie-deploy`. Keep the
+   private file (`~/.ssh/piccie_ed25519`) on your computer and never copy it to
+   the card.
+8. Save or copy the completed file to the top level of the microSD boot drive,
    replacing the blank template if necessary. Its name must be exactly
    `piccie-r2.txt`.
-8. Confirm the file is present on the boot drive, then safely eject the
+9. Confirm the file is present on the boot drive, then safely eject the
    microSD card.
 
 The file should contain only these settings after the comment instructions:
@@ -199,6 +205,7 @@ ACCESS_KEY_ID=your-r2-access-key-id
 SECRET_ACCESS_KEY=your-r2-secret-access-key
 BUCKET_NAME=piccie-photos
 JURISDICTION=default
+SSH_AUTHORIZED_KEY=ssh-ed25519 AAAA... piccie-deploy
 ```
 
 Piccie validates and moves these values into the writable data partition before
@@ -214,8 +221,34 @@ R2 remains private. Piccie creates signed guest download links that work for
 seven days, which is Cloudflare's maximum. Generate a new event link from the
 booth if an older event needs to be shared again.
 
+New photos use a readable event layout in R2:
+
+```text
+sarah-james-2026-06-14/
+├── strips/
+│   ├── sarah-james-strip-00001.jpg
+│   └── sarah-james-strip-00002.jpg
+├── photos/
+│   ├── sarah-james-strip-00001-photo-01.jpg
+│   ├── sarah-james-strip-00001-photo-02.jpg
+│   └── sarah-james-strip-00001-photo-03.jpg
+└── download-all.zip
+```
+
+The event name and date determine the folder name. Piccie adds `-2`, `-3` and
+so on only when two events would otherwise use the same folder. Strip numbers
+start at `00001`, never get reused after deletion, and stay attached to the
+same session. In the event gallery, choose **Share event** to show a QR code.
+Its **Download all photos** button downloads a ZIP containing both `strips/`
+and `photos/`; individual guest QR codes still open only that guest's finished
+strip. Older UUID-based R2 objects remain valid after an upgrade and are
+removed through the existing deletion flow.
+
 Do not add a Wi-Fi name or password to `piccie-r2.txt`. Wi-Fi is a separate
 on-device setup step and is stored by the Raspberry Pi's network manager.
+The SSH public key is not secret; its matching private key is. After onboarding,
+change or remove the four-digit operator PIN and SSH key under **Settings → Operator
+access**.
 
 ## 4. Complete first boot
 
@@ -227,9 +260,10 @@ remove power or the card during that restart.
 1. Insert the flashed microSD card and power on the booth.
 2. On the Piccie touchscreen, choose the Wi-Fi network and enter its password.
 3. Confirm that Piccie found and securely imported the R2 file.
-4. Choose an operator PIN.
-5. Add your computer's SSH public key if you want remote updates and access to
-   the soak test, then finish setup.
+4. Choose a four-digit operator PIN.
+5. Confirm or add your computer's SSH public key if you want remote updates and
+   access to the soak test. A key included in `piccie-r2.txt` is already
+   installed; then finish setup.
 
 Piccie uploads a temporary private strip and downloads it through a signed R2
 link before completing onboarding. The system partition is protected as

@@ -11,6 +11,7 @@ from engine.atomicio import write_json_atomic, write_text_atomic
 from engine.clock import wait_for_system_clock
 from engine.config import ConfigStore, R2Config
 from engine.r2 import R2Uploader
+from engine.ssh_access import set_authorized_key
 
 
 def _r2_probe(config: R2Config) -> None:
@@ -69,11 +70,9 @@ def provision_booth(
     store.set_admin_pin(payload["admin_pin"])
 
     if payload.get("ssh_authorized_key"):
-        ssh_dir = data_dir / "ssh"
-        ssh_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
-        authorized_keys = ssh_dir / "authorized_keys"
-        write_text_atomic(authorized_keys, payload["ssh_authorized_key"] + "\n")
-        authorized_keys.chmod(0o600)
+        set_authorized_key(
+            payload["ssh_authorized_key"], data_dir / "ssh" / "authorized_keys"
+        )
 
     marker = data_dir / ".provisioned"
     write_text_atomic(

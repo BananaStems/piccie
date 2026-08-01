@@ -18,6 +18,11 @@ the Piccie bucket. Rotate the token if the card is lost or reused. Wi-Fi
 credentials are entered on Piccie's touchscreen and must never be added to the
 R2 file.
 
+The same setup file may include one SSH public key. Public keys are safe to
+copy; private keys are not. Piccie installs only the validated public key in
+`/data/ssh/authorized_keys`. Keep the matching private key on the operator's
+computer and never place it on the microSD card or in this repository.
+
 The engine listens on port 8080 so a paired phone can reach Template Studio.
 LAN clients can only load the Studio assets and `/api/studio/*`; capture, event,
 Wi-Fi, settings, onboarding, gallery and pairing endpoints remain loopback-only.

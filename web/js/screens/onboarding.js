@@ -219,8 +219,8 @@ export function renderOnboardingScreen({ app, state, render, api, escapeHtml, lo
       "Finish setup",
       "Choose the PIN used to open settings.",
       `<form class="onboarding-fields onboarding-finish-fields" id="onboarding-finish-form" autocomplete="off">
-          <label class="field-wide">Operator PIN<input class="pin-input" name="operator_code" type="text" inputmode="numeric" data-osk-layout="pin" pattern="[0-9]{4,8}" minlength="4" maxlength="8" autocomplete="off" autocapitalize="none" spellcheck="false" data-1p-ignore="true" data-lpignore="true" required /><small>Use 4–8 digits.</small></label>
-          <label class="field-wide">SSH public key <span class="field-optional">Optional</span><textarea name="ssh_authorized_key" rows="2" maxlength="1000" autocomplete="off" placeholder="ssh-ed25519 …"></textarea><small>Allows secure remote updates from your computer.</small></label>
+          <label class="field-wide">Operator PIN<input class="pin-input" name="operator_code" type="text" inputmode="numeric" data-osk-layout="pin" pattern="[0-9]{4}" minlength="4" maxlength="4" autocomplete="off" autocapitalize="none" spellcheck="false" data-1p-ignore="true" data-lpignore="true" required /><small>Use exactly 4 digits.</small></label>
+          <label class="field-wide">SSH public key <span class="field-optional">Optional</span><textarea name="ssh_authorized_key" rows="2" maxlength="1000" autocomplete="off" placeholder="ssh-ed25519 …"></textarea><small>Allows secure remote updates. A key in piccie-r2.txt is already installed; you can change it later in Settings.</small></label>
           <p class="onboarding-submit-message field-wide" id="onboarding-submit-message" role="status"></p>
         </form>`,
       `<button class="btn btn-secondary" type="button" id="onboarding-finish-back">Back</button>

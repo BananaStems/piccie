@@ -25,6 +25,8 @@ import { renderOnboardingScreen } from "./screens/onboarding.js";
 
 const app = document.getElementById("app");
 const WIFI_OFFLINE_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M4.5 12a11 11 0 0 1 15 0"/><path d="M8 15.5a6 6 0 0 1 8 0"/><path d="M12 19h.01"/><path d="m4 4 16 16"/></svg>';
+const UNLOCK_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="10" width="14" height="10" rx="2"/><path d="M9 10V7a4 4 0 0 1 7.5-2"/><path d="M12 14v2"/></svg>';
+const BACKSPACE_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m10 6-6 6 6 6h8a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2Z"/><path d="m13 10 4 4m0-4-4 4"/></svg>';
 
 const state = {
   view: "loading",
@@ -122,7 +124,7 @@ function showConfirm({ title, message, confirmLabel = "Confirm", cancelLabel = "
 }
 
 // cancelled. The input focuses on open, which raises the on-screen keyboard.
-function promptText({ title, value = "", placeholder = "", confirmLabel = "Save", cancelLabel = "Cancel", required = true, maxLength = 80, type = "text", inputMode = "text", pin = false }) {
+function promptText({ title, value = "", placeholder = "", confirmLabel = "Save", cancelLabel = "Cancel", required = true, maxLength = 80, type = "text", inputMode = "text" }) {
   return new Promise((resolve) => {
     const frame = document.getElementById("booth-frame");
     const overlay = document.createElement("div");
@@ -138,25 +140,13 @@ function promptText({ title, value = "", placeholder = "", confirmLabel = "Save"
     titleEl.textContent = title;
 
     const input = document.createElement("input");
-    input.className = `prompt-input${pin ? " pin-input" : ""}`;
-    // Chromium offers to save any submitted password-type value. PINs are
-    // visually masked with CSS instead, so they never enter password-manager
-    // heuristics while remaining private on screen.
-    input.type = pin ? "text" : type;
-    input.inputMode = pin ? "numeric" : inputMode;
+    input.className = "prompt-input";
+    input.type = type;
+    input.inputMode = inputMode;
     input.value = value;
     input.placeholder = placeholder;
     input.maxLength = maxLength;
     input.setAttribute("autocomplete", "off");
-    if (pin) {
-      input.dataset.oskLayout = "pin";
-      input.pattern = "[0-9]*";
-      input.setAttribute("autocapitalize", "none");
-      input.setAttribute("spellcheck", "false");
-      input.setAttribute("data-1p-ignore", "true");
-      input.setAttribute("data-lpignore", "true");
-    }
-
     const actions = document.createElement("div");
     actions.className = "confirm-actions";
 
@@ -347,23 +337,134 @@ async function loadAdminData() {
   }
 }
 
-async function requestOperatorUnlock() {
-  let title = "Operator PIN";
-  for (;;) {
-    const pin = await promptText({
-      title,
-      confirmLabel: "Unlock",
-      pin: true,
-      maxLength: 8,
+function operatorKeypadMarkup({ cancellable = false } = {}) {
+  const digits = ["1", "2", "3", "4", "5", "6", "7", "8", "9"];
+  return `
+    <form class="operator-pin-panel" data-operator-pin-form autocomplete="off" tabindex="-1">
+      <div class="operator-pin-heading">
+        <h2 class="confirm-title">Operator PIN</h2>
+        ${cancellable ? '<button class="operator-pin-cancel" type="button" data-operator-pin-cancel>Cancel</button>' : ""}
+      </div>
+      <div class="operator-pin-display" data-operator-pin-display role="status" aria-label="No digits entered">
+        ${[0, 1, 2, 3].map((index) => `<span class="operator-pin-slot" data-operator-pin-slot="${index}"></span>`).join("")}
+      </div>
+      <p class="form-error" data-operator-pin-error role="alert"></p>
+      <div class="operator-pin-grid">
+        ${digits.map((digit) => `<button class="operator-pin-key" type="button" data-operator-digit="${digit}">${digit}</button>`).join("")}
+        <button class="operator-pin-key operator-pin-action" type="button" data-operator-backspace aria-label="Delete last digit">${BACKSPACE_ICON}</button>
+        <button class="operator-pin-key" type="button" data-operator-digit="0">0</button>
+        <button class="operator-pin-key operator-pin-action operator-pin-unlock" type="submit" data-operator-unlock aria-label="Unlock" disabled>${UNLOCK_ICON}</button>
+      </div>
+    </form>`;
+}
+
+function bindOperatorKeypad(root, { onSubmit, onCancel = null }) {
+  const form = root.matches?.("[data-operator-pin-form]")
+    ? root
+    : root.querySelector("[data-operator-pin-form]");
+  const display = form.querySelector("[data-operator-pin-display]");
+  const slots = [...form.querySelectorAll("[data-operator-pin-slot]")];
+  const error = form.querySelector("[data-operator-pin-error]");
+  const unlock = form.querySelector("[data-operator-unlock]");
+  let code = "";
+  let busy = false;
+
+  const update = () => {
+    slots.forEach((slot, index) => {
+      slot.textContent = index < code.length ? "*" : "";
+      slot.classList.toggle("is-filled", index < code.length);
     });
-    if (!pin) return false;
+    display.setAttribute("aria-label", `${code.length} of 4 digits entered`);
+    unlock.disabled = busy || code.length !== 4;
+  };
+
+  const addDigit = (digit) => {
+    if (busy || code.length >= 4) return;
+    code += digit;
+    error.textContent = "";
+    update();
+  };
+
+  const removeDigit = () => {
+    if (busy || !code) return;
+    code = code.slice(0, -1);
+    error.textContent = "";
+    update();
+  };
+
+  form.querySelectorAll("[data-operator-digit]").forEach((button) => {
+    button.addEventListener("click", () => addDigit(button.dataset.operatorDigit));
+  });
+  form.querySelector("[data-operator-backspace]").addEventListener("click", removeDigit);
+  form.querySelector("[data-operator-pin-cancel]")?.addEventListener("click", () => onCancel?.());
+
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (busy || code.length !== 4) return;
+    busy = true;
+    error.textContent = "";
+    update();
     try {
-      await api.unlockAdmin(pin);
-      return true;
-    } catch {
-      title = "Incorrect PIN";
+      await onSubmit(code);
+    } catch (submitError) {
+      code = "";
+      busy = false;
+      error.textContent = submitError?.message || "Incorrect PIN";
+      update();
+      form.focus();
     }
-  }
+  });
+
+  form.addEventListener("keydown", (event) => {
+    if (/^\d$/.test(event.key)) {
+      event.preventDefault();
+      addDigit(event.key);
+    } else if (event.key === "Backspace") {
+      event.preventDefault();
+      removeDigit();
+    } else if (event.key === "Enter") {
+      event.preventDefault();
+      form.requestSubmit();
+    } else if (event.key === "Escape" && onCancel) {
+      event.preventDefault();
+      onCancel();
+    }
+  });
+
+  update();
+  form.focus();
+}
+
+function requestOperatorUnlock() {
+  closeOnScreenKeyboard();
+  return new Promise((resolve) => {
+    const frame = document.getElementById("booth-frame");
+    const overlay = document.createElement("div");
+    overlay.className = "confirm-overlay operator-pin-overlay";
+    overlay.setAttribute("role", "dialog");
+    overlay.setAttribute("aria-modal", "true");
+    overlay.innerHTML = operatorKeypadMarkup({ cancellable: true });
+
+    let settled = false;
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      overlay.remove();
+      resolve(result);
+    };
+
+    overlay.addEventListener("click", (event) => {
+      if (event.target === overlay) finish(false);
+    });
+    frame.appendChild(overlay);
+    bindOperatorKeypad(overlay, {
+      onCancel: () => finish(false),
+      onSubmit: async (pin) => {
+        await api.unlockAdmin(pin);
+        finish(true);
+      },
+    });
+  });
 }
 
 let cornerExitInProgress = false;
@@ -389,34 +490,18 @@ async function handleCornerTap() {
 function renderAdminLock() {
   app.innerHTML = `
     <div class="screen centered">
-      <form class="confirm-panel prompt-panel" id="admin-unlock-form" autocomplete="off">
-        <h2 class="confirm-title">Operator PIN</h2>
-        <input class="prompt-input pin-input" id="admin-pin" type="text" inputmode="numeric"
-          data-osk-layout="pin" pattern="[0-9]*" maxlength="8" autocomplete="off"
-          autocapitalize="none" spellcheck="false" data-1p-ignore="true" data-lpignore="true"
-          aria-label="Operator PIN" />
-        <p class="form-error" id="admin-pin-error" role="alert"></p>
-        <button class="btn" type="submit">Unlock</button>
-      </form>
+      ${operatorKeypadMarkup()}
     </div>`;
-  const form = document.getElementById("admin-unlock-form");
-  const input = document.getElementById("admin-pin");
-  form.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    try {
-      await api.unlockAdmin(input.value.trim());
+  bindOperatorKeypad(app, {
+    onSubmit: async (pin) => {
+      await api.unlockAdmin(pin);
       // An event may have been removed outside the UI while it was persisted.
       if (state.status.active_event_id) await api.setActiveEvent(null);
       state.status.active_event_id = null;
       state.view = "admin";
       render();
-    } catch (error) {
-      document.getElementById("admin-pin-error").textContent = error.message;
-      input.value = "";
-      input.focus();
-    }
+    },
   });
-  input.focus();
 }
 
 async function exitParty() {
@@ -488,7 +573,7 @@ function render() {
       renderEditorScreen({ app, state, render, escapeHtml, promptText, showConfirm });
       break;
     case "gallery":
-      renderGalleryScreen({ app, state, render, api, escapeHtml });
+      renderGalleryScreen({ app, state, render, api, escapeHtml, showConfirm });
       break;
     case "party":
       renderParty();
@@ -827,7 +912,7 @@ async function finalizeSession() {
     state.stripUrl = session.strip_local_url
       ? `${window.location.origin}${session.strip_local_url}?t=${Date.now()}`
       : null;
-    state.qrUrl = session.r2_strip_url || null;
+    state.qrUrl = session.guest_qr_url || session.r2_strip_url || null;
     state.resultOffline =
       !state.status?.wifi_ssid || state.status?.r2_reachable === false;
     state.partyState = "result";
@@ -863,7 +948,7 @@ async function runPhotoSequence() {
       if (!state.captureShellMounted) return;
       try {
         await pendingShot;
-        const photoUrl = `${api.photoUrl(state.sessionId, i)}?t=${Date.now()}`;
+        const photoUrl = `${api.photoUrl(state.sessionId, i)}?filtered=true&t=${Date.now()}`;
         await animateThumbnailToSlot(i, photoUrl);
         if (i < 3) {
           setActiveSlot(i + 1);
@@ -938,7 +1023,7 @@ function pollUpload() {
       state.status = status;
       failures = 0;
       if (session.r2_strip_url) {
-        state.qrUrl = session.r2_strip_url;
+        state.qrUrl = session.guest_qr_url || session.r2_strip_url;
         if (!state.stripUrl && session.strip_local_url) {
           state.stripUrl = `${window.location.origin}${session.strip_local_url}?t=${Date.now()}`;
         }
@@ -962,7 +1047,7 @@ function pollUpload() {
     }
   };
   check();
-  state.pollInterval = setInterval(check, 5000);
+  state.pollInterval = setInterval(check, 1000);
 }
 
 function startResultTimer() {

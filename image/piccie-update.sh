@@ -37,6 +37,9 @@ archive, destination = sys.argv[1:]
 root = pathlib.Path(destination).resolve()
 with tarfile.open(archive, "r:gz") as bundle:
     for member in bundle.getmembers():
+        parts = pathlib.PurePosixPath(member.name).parts
+        if "__MACOSX" in parts or any(part.startswith("._") for part in parts):
+            raise SystemExit(f"unsupported macOS metadata entry: {member.name}")
         target = (root / member.name).resolve()
         if root not in target.parents and target != root:
             raise SystemExit(f"unsafe archive path: {member.name}")

@@ -15,26 +15,26 @@ Usage:
 Without BOOT_VOLUME, the helper uses the only mounted Raspberry Pi boot volume
 under /Volumes. Pass the mount path explicitly if more than one card is present.
 
-The private source defaults to ./piccie-r2.txt and is ignored by Git.
+The private setup source defaults to ./piccie-r2.txt and is ignored by Git.
 EOF
 }
 
 if [[ "${1:-}" == "--init" ]]; then
   [[ "$#" -eq 1 ]] || { usage >&2; exit 2; }
   if [[ -e "${SOURCE}" ]]; then
-    echo "Private R2 file already exists: ${SOURCE}"
+    echo "Private setup file already exists: ${SOURCE}"
     exit 0
   fi
   cp "${TEMPLATE}" "${SOURCE}"
   chmod 600 "${SOURCE}"
-  echo "Created private R2 file: ${SOURCE}"
+  echo "Created private setup file: ${SOURCE}"
   echo "Fill it in, then run ./image/copy-r2-to-card.sh after flashing."
   exit 0
 fi
 
 [[ "$#" -le 1 ]] || { usage >&2; exit 2; }
 [[ -f "${SOURCE}" ]] || {
-  echo "Private R2 file not found: ${SOURCE}" >&2
+  echo "Private setup file not found: ${SOURCE}" >&2
   echo "Create it with: ./image/copy-r2-to-card.sh --init" >&2
   exit 2
 }
@@ -50,7 +50,7 @@ source = Path(sys.argv[2])
 try:
     validated_r2(parse_boot_config(source.read_text()))
 except (OSError, UnicodeError, BootConfigError) as exc:
-    raise SystemExit(f"R2 file is not ready: {exc}")
+    raise SystemExit(f"Piccie setup file is not ready: {exc}")
 PY
 
 TARGET="${1:-}"
@@ -104,5 +104,5 @@ cp "${SOURCE}" "${TEMP_DESTINATION}"
 mv -f "${TEMP_DESTINATION}" "${DESTINATION}"
 sync "${DESTINATION}" 2>/dev/null || sync
 
-echo "R2 settings copied safely to: ${DESTINATION}"
+echo "Piccie setup settings copied safely to: ${DESTINATION}"
 echo "No credential values were printed. Eject the card before removing it."

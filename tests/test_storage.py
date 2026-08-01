@@ -1,4 +1,5 @@
 import os
+import sqlite3
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -36,11 +37,26 @@ def test_create_event_and_session(storage):
     assert event.date_separator == "/"
     assert event.ends_at == "2026-06-14T22:30:00"
     assert event.photo_count == 0
+    assert event.r2_folder == "wedding-2026-06-14"
     session = storage.create_session(event.id)
+    assert session.strip_number == 1
     assert Path(session.local_path).exists()
     storage.mark_session_finalized(session.id)
     updated = storage.get_event(event.id)
     assert updated.photo_count == 1
+
+
+def test_event_folder_collisions_and_deleted_strip_numbers_are_not_reused(storage):
+    first_event = storage.create_event("Wedding", "2026-06-14", "classic")
+    second_event = storage.create_event("Wedding", "2026-06-14", "classic")
+    assert first_event.r2_folder == "wedding-2026-06-14"
+    assert second_event.r2_folder == "wedding-2026-06-14-2"
+
+    first_session = storage.create_session(first_event.id)
+    assert first_session.strip_number == 1
+    assert storage.delete_session(first_session.id)[0] is True
+    second_session = storage.create_session(first_event.id)
+    assert second_session.strip_number == 2
 
 
 def test_list_event_sessions(storage):
@@ -102,6 +118,50 @@ def test_db_migration_adds_line_columns(storage):
     assert "share_url" in cols
     assert "share_token" in cols
     assert "ends_at" in cols
+    assert "r2_folder" in cols
+    assert "next_strip_number" in cols
+
+
+def test_migration_assigns_stable_folder_and_strip_numbers(tmp_path):
+    db = tmp_path / "legacy.db"
+    events_dir = tmp_path / "events"
+    with sqlite3.connect(db) as conn:
+        conn.executescript(
+            """
+            CREATE TABLE events (
+                id TEXT PRIMARY KEY, name TEXT NOT NULL, date TEXT NOT NULL,
+                template_id TEXT NOT NULL, photo_count INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL
+            );
+            CREATE TABLE sessions (
+                id TEXT PRIMARY KEY, event_id TEXT NOT NULL, created_at TEXT NOT NULL,
+                r2_strip_url TEXT, local_path TEXT NOT NULL,
+                upload_status TEXT NOT NULL DEFAULT 'pending'
+            );
+            CREATE TABLE r2_deletions (
+                basename TEXT PRIMARY KEY, created_at TEXT NOT NULL
+            );
+            INSERT INTO events VALUES (
+                'event-1', 'Sarah & James', '2026-06-14', 'classic', 2,
+                '2026-01-01T00:00:00+00:00'
+            );
+            INSERT INTO sessions VALUES (
+                'session-1', 'event-1', '2026-01-01T01:00:00+00:00', NULL,
+                '/tmp/session-1', 'complete'
+            );
+            INSERT INTO sessions VALUES (
+                'session-2', 'event-1', '2026-01-01T02:00:00+00:00', NULL,
+                '/tmp/session-2', 'complete'
+            );
+            """
+        )
+
+    migrated = Storage(db, events_dir)
+
+    assert migrated.get_event("event-1").r2_folder == "sarah-james-2026-06-14"
+    assert migrated.get_session("session-1").strip_number == 1
+    assert migrated.get_session("session-2").strip_number == 2
+    assert migrated.create_session("event-1").strip_number == 3
 
 
 def test_event_concludes_24_hours_after_end(storage):
@@ -132,7 +192,11 @@ def test_clear_event_photos(storage):
     storage.mark_session_finalized(session.id)
     ok, basenames = storage.clear_event_photos(event.id)
     assert ok is True
-    assert basenames == [f"event-content:{event.id}"]
+    assert basenames == [
+        f"named-event-session:{event.id}:{session.id}:{event.r2_folder}:wedding-strip-00001",
+        f"event-content:{event.id}",
+        f"named-event-archive:{event.id}:{event.r2_folder}",
+    ]
     assert storage.get_session(session.id) is None
     assert not session_dir.exists()
     refreshed = storage.get_event(event.id)
@@ -154,11 +218,66 @@ def test_clear_event_photos_collects_r2_targets(storage):
     )
     ok, basenames = storage.clear_event_photos(event.id)
     assert ok is True
-    assert basenames == [target, f"event-content:{event.id}"]
-    assert storage.pending_r2_deletions() == [target, f"event-content:{event.id}"]
+    named_archive = f"named-event-archive:{event.id}:{event.r2_folder}"
+    assert basenames == [target, f"event-content:{event.id}", named_archive]
+    assert storage.pending_r2_deletions() == [
+        target,
+        f"event-content:{event.id}",
+        named_archive,
+    ]
     storage.complete_r2_deletion(target)
     storage.complete_r2_deletion(f"event-content:{event.id}")
+    storage.complete_r2_deletion(named_archive)
     assert storage.pending_r2_deletions() == []
+
+
+def test_clear_event_photos_invalidates_existing_event_share(storage):
+    event = storage.create_event("Wedding", "2026-06-14", "classic")
+    session = storage.create_session(event.id)
+    token = f"{event.id}.secret"
+    storage.set_event_share(event.id, "https://gallery.example/shared", token)
+    archive = storage.events_dir / event.id / "download-all.zip"
+    archive.write_bytes(b"old archive")
+
+    ok, targets = storage.clear_event_photos(event.id)
+
+    assert ok is True
+    assert f"event-share:{event.id}:{token}" in targets
+    refreshed = storage.get_event(event.id)
+    assert refreshed.share_url is None
+    assert refreshed.share_token is None
+    assert not archive.exists()
+
+
+def test_delete_session_removes_only_one_strip_and_invalidates_shared_gallery(storage):
+    event = storage.create_event("Wedding", "2026-06-14", "classic")
+    first = storage.create_session(event.id)
+    second = storage.create_session(event.id)
+    for session in (first, second):
+        (Path(session.local_path) / "strip.jpg").write_bytes(b"fake")
+        storage.mark_session_finalized(session.id)
+    token = f"{event.id}.secret"
+    storage.set_event_share(event.id, "https://gallery.example/shared", token)
+
+    ok, targets = storage.delete_session(first.id)
+
+    assert ok is True
+    assert targets == [
+        f"named-event-session:{event.id}:{first.id}:{event.r2_folder}:wedding-strip-00001",
+        f"event-archive:{event.id}",
+        f"named-event-archive:{event.id}:{event.r2_folder}",
+        f"event-share:{event.id}:{token}",
+    ]
+    assert storage.get_session(first.id) is None
+    assert not Path(first.local_path).exists()
+    assert storage.get_session(second.id) is not None
+    assert Path(second.local_path).exists()
+    refreshed = storage.get_event(event.id)
+    assert refreshed.photo_count == 1
+    assert refreshed.share_url is None
+    assert refreshed.share_token is None
+    assert set(storage.pending_r2_deletions()) == set(targets)
+    assert storage.delete_session(first.id) == (False, [])
 
 
 def test_delete_event_removes_db_and_files(storage):
@@ -168,7 +287,11 @@ def test_delete_event_removes_db_and_files(storage):
     assert event_dir.exists()
     ok, basenames = storage.delete_event(event.id)
     assert ok is True
-    assert basenames == [f"event:{event.id}"]
+    assert basenames == [
+        f"named-event-session:{event.id}:{session.id}:{event.r2_folder}:wedding-strip-00001",
+        f"event:{event.id}",
+        f"named-event:{event.id}:{event.r2_folder}",
+    ]
     assert storage.get_event(event.id) is None
     assert storage.get_session(session.id) is None
     assert not event_dir.exists()

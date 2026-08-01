@@ -6,6 +6,7 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SCRIPT="${REPO_ROOT}/image/piccie-lockdown.sh"
 SETUP="${REPO_ROOT}/image/setup-appliance.sh"
 SMOKE="${REPO_ROOT}/image/smoke-qemu.sh"
+LIGHTDM_CONFIG="${REPO_ROOT}/image/pi-gen/stage2-piccie/files/lightdm/50-piccie.conf"
 PASS_COUNT=0
 
 fail() {
@@ -120,6 +121,22 @@ test_readonly_runtime_mountpoints_are_prepared() {
     || fail "LightDM writable directories are not provisioned by tmpfiles"
 }
 
+test_dns_uses_networkmanager_runtime_state() {
+  grep -Fq "ln -s /run/NetworkManager/resolv.conf /etc/resolv.conf" "${SETUP}" \
+    || fail "DNS does not use NetworkManager's writable runtime resolver file"
+  grep -Fq "rc-manager=symlink" "${REPO_ROOT}/image/files/nm-keyfile-path.conf" \
+    || fail "NetworkManager is not configured to manage the resolver symlink"
+}
+
+test_lightdm_authority_uses_writable_runtime_state() {
+  awk '
+    /^\[/ { section = $0 }
+    section == "[LightDM]" && $0 == "user-authority-in-system-dir=true" { found = 1 }
+    END { exit !found }
+  ' "${LIGHTDM_CONFIG}" \
+    || fail "LightDM user authority is not configured in the global LightDM section"
+}
+
 test_distro_root_growth_is_disabled() {
   grep -Fq "systemd-growfs-root.service rpi-resize.service" "${SETUP}" \
     || fail "distro root-growth services are not masked"
@@ -152,6 +169,8 @@ for test_name in \
   test_failed_recovery_remount_fails_closed \
   test_failed_readonly_enforcement_fails_closed \
   test_readonly_runtime_mountpoints_are_prepared \
+  test_dns_uses_networkmanager_runtime_state \
+  test_lightdm_authority_uses_writable_runtime_state \
   test_distro_root_growth_is_disabled \
   test_ssh_identity_uses_data \
   test_smoke_gate_rejects_local_filesystem_failures; do

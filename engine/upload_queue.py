@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 MAX_QUEUE_SIZE = 50
 HISTORICAL_QUEUE_LIMIT = 40
 RESCAN_INTERVAL_SECONDS = 30
+CLOUD_HEALTH_RETRY_SECONDS = 5
 
 
 @dataclass
@@ -158,10 +159,18 @@ class UploadQueue:
     def _deletion_conflicts_with_upload(self, target: str) -> bool:
         with self._inflight_lock:
             inflight = dict(self._inflight_events)
+        if target.startswith("named-event-session:"):
+            session_id = target.split(":", 4)[2]
+            return session_id in inflight
+        if target.startswith("named-event-") or target.startswith("named-event:"):
+            event_id = target.split(":", 2)[1]
+            return event_id in inflight.values()
         if target.startswith("event-session:"):
             _, _event_id, session_id = target.split(":", 2)
             return session_id in inflight
-        if target.startswith(("event:", "event-content:", "event-share:")):
+        if target.startswith(
+            ("event:", "event-content:", "event-archive:", "event-share:")
+        ):
             event_id = target.split(":", 2)[1]
             return event_id in inflight.values()
         return False
@@ -196,8 +205,21 @@ class UploadQueue:
         """Re-enqueue pending/failed sessions periodically. Without this a WiFi
         outage during a party permanently strands every session it touched until
         a power cycle (the upload thread only ran resume_pending once at boot)."""
-        while not self._stop_event.wait(RESCAN_INTERVAL_SECONDS):
+        while True:
+            cloud_reachable, _error = self.cloud_health
+            wait_seconds = (
+                RESCAN_INTERVAL_SECONDS
+                if cloud_reachable is True
+                else CLOUD_HEALTH_RETRY_SECONDS
+            )
+            if self._stop_event.wait(wait_seconds):
+                return
             try:
+                # The first startup probe can run before Wi-Fi auto-connects.
+                # Retry quickly until R2 is proven reachable; upload failures
+                # also set this false so recovery does not require a reboot.
+                if self.cloud_health[0] is not True:
+                    self.check_cloud_health()
                 self.resume_pending()
                 self.retry_pending_deletions()
                 self.storage.prune_abandoned_sessions()
@@ -264,6 +286,8 @@ class UploadQueue:
         # Never upload a strip truncated by a power yank — it would live on
         # R2 as a permanently-broken image behind the guest's QR code.
         files = [job.session_dir / "strip.jpg"]
+        if target.startswith("named-event-session:"):
+            files.extend(job.session_dir / f"photo-{index}.jpg" for index in range(1, 4))
         broken = [f.name for f in files if not jpeg_is_intact(f)]
         if broken:
             logger.error(
@@ -282,6 +306,7 @@ class UploadQueue:
             job.session_dir,
             event.id,
             job.session_id,
+            cloud_target=target,
         )
         # Deletion may have been requested while the network upload was active.
         # Delete again after upload so the final cloud state is always empty.

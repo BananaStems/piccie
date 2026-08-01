@@ -1,4 +1,6 @@
 
+import io
+
 from PIL import Image, ImageDraw
 
 from engine.composer import (
@@ -11,6 +13,7 @@ from engine.composer import (
     compose_strip,
     configure_filter,
     photo_slot_size,
+    render_filtered_photo_preview_jpeg,
     render_strip_image,
 )
 from engine.templates import TemplateRegistry
@@ -43,6 +46,46 @@ def test_mono_filter_changes_preview_and_keeps_neutral_reset():
     assert filtered.getpixel((0, 0))[0] == filtered.getpixel((0, 0))[1] == filtered.getpixel((0, 0))[2]
     configure_filter(name="clean", strength=1)
     assert apply_filter(source).tobytes() == source.tobytes()
+
+
+def test_captured_photo_preview_uses_filter_without_changing_original(tmp_path):
+    path = tmp_path / "photo.jpg"
+    Image.new("RGB", (1200, 800), (30, 120, 220)).save(path, "JPEG")
+    original = path.read_bytes()
+    try:
+        configure_filter(name="mono", strength=1)
+        preview_bytes = render_filtered_photo_preview_jpeg(path)
+    finally:
+        configure_filter(name="clean", strength=1)
+
+    with Image.open(io.BytesIO(preview_bytes)) as preview:
+        red, green, blue = preview.getpixel((preview.width // 2, preview.height // 2))
+        assert preview.width == 640
+        assert max(red, green, blue) - min(red, green, blue) <= 2
+    assert path.read_bytes() == original
+
+
+def test_photo_filter_does_not_tint_template_background(tmp_path):
+    template = TemplateRegistry().load("love")
+    photos = []
+    for index in range(3):
+        path = tmp_path / f"photo-{index}.jpg"
+        Image.new("RGB", (800, 600), (100, 100, 100)).save(path, "JPEG")
+        photos.append(path)
+    output = tmp_path / "strip.jpg"
+
+    try:
+        configure_filter(name="warm", strength=1)
+        compose_strip(template, photos, "LOVE", "", "2026-08-01", output)
+    finally:
+        configure_filter(name="clean", strength=1)
+
+    with Image.open(output) as strip:
+        background = strip.getpixel((10, 10))
+        filtered_photo = strip.getpixel((300, 200))
+    assert min(background) >= 250
+    assert max(background) - min(background) <= 2
+    assert filtered_photo[0] > filtered_photo[2] + 10
 
 
 def test_strip_preview_has_placeholders():
@@ -111,7 +154,7 @@ def test_love_footer_layout_matches_figma():
     assert footer["date"]["box"][1] == 398
     assert footer["date"]["font"] == "title"
     assert template.fonts["title"] == "bodoni72"
-    assert template.fonts["line2"] == "cursive"
+    assert template.fonts["line2"] == "assets/GreatVibes-Regular.ttf"
     img = render_strip_image(template, "marisa's", "twenty first birthday", "2026-08-01", photos=None)
     assert img.size == (600, 1800)
 
@@ -158,6 +201,14 @@ def test_love_line2_renders_script_text():
     without_line2 = render_strip_image(template, "LOVE", "", "2026-06-14", photos=None)
     with_line2 = render_strip_image(template, "LOVE", "twenty first birthday", "2026-06-14", photos=None)
     assert without_line2.tobytes() != with_line2.tobytes()
+
+
+def test_love_line2_uses_packaged_script_font():
+    template = TemplateRegistry().load("love")
+    font_path = template.path / template.fonts["line2"]
+    assert font_path.is_file()
+    font = _resolve_template_font(template, "line2", 48)
+    assert font.getname()[0] == "Great Vibes"
 
 
 def test_fit_text_width_only_ignores_height():

@@ -123,8 +123,8 @@ class ConfigStore:
         return config
 
     def set_admin_pin(self, pin: str) -> AppConfig:
-        if not pin.isdigit() or not 4 <= len(pin) <= 8:
-            raise ValueError("PIN must contain 4 to 8 digits")
+        if not pin.isdigit() or len(pin) != 4:
+            raise ValueError("PIN must contain exactly 4 digits")
         config = self.ensure()
         salt = secrets.token_bytes(16)
         digest = hashlib.pbkdf2_hmac(

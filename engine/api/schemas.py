@@ -6,6 +6,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from engine.ssh_access import normalize_authorized_key
+
 
 class StatusResponse(BaseModel):
     version: str
@@ -28,7 +30,20 @@ class StatusResponse(BaseModel):
 
 
 class AdminUnlockRequest(BaseModel):
-    pin: str = Field(min_length=4, max_length=8, pattern=r"^\d+$")
+    pin: str = Field(min_length=4, max_length=4, pattern=r"^\d{4}$")
+
+
+class AdminPinUpdateRequest(BaseModel):
+    pin: str = Field(min_length=4, max_length=4, pattern=r"^\d{4}$")
+
+
+class SshAuthorizedKeyRequest(BaseModel):
+    ssh_authorized_key: str = Field(default="", max_length=1000)
+
+    @field_validator("ssh_authorized_key")
+    @classmethod
+    def valid_ssh_key(cls, value: str) -> str:
+        return normalize_authorized_key(value)
 
 
 class ActiveEventRequest(BaseModel):
@@ -54,16 +69,13 @@ class WifiConnectRequest(BaseModel):
 
 
 class OnboardingCompleteRequest(BaseModel):
-    admin_pin: str = Field(min_length=4, max_length=8, pattern=r"^\d+$")
+    admin_pin: str = Field(min_length=4, max_length=4, pattern=r"^\d{4}$")
     ssh_authorized_key: str = Field(default="", max_length=1000)
 
     @field_validator("ssh_authorized_key")
     @classmethod
     def valid_ssh_key(cls, value: str) -> str:
-        value = value.strip()
-        if value and not value.startswith(("ssh-ed25519 ", "ssh-rsa ", "ecdsa-sha2-")):
-            raise ValueError("Enter an OpenSSH public key, or leave this blank")
-        return value
+        return normalize_authorized_key(value)
 
 
 class EventRequest(BaseModel):
@@ -139,6 +151,7 @@ class SessionResponse(BaseModel):
     upload_error: str | None = None
     upload_attempts: int = 0
     r2_strip_url: str | None
+    guest_qr_url: str | None = None
     strip_local_url: str | None = None
     photo_local_urls: list[str] = []
 

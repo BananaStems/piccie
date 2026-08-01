@@ -6,7 +6,7 @@ from pathlib import Path
 from engine.atomicio import jpeg_is_intact
 from engine.camera import CameraService
 from engine.composer import compose_strip
-from engine.paths import r2_session_target
+from engine.paths import r2_named_session_target, r2_named_strip_stem
 from engine.storage import (
     Event,
     Session,
@@ -128,10 +128,20 @@ class CaptureDelivery:
         return session, event
 
     def _meta(self, session: Session, event: Event) -> dict:
+        existing_target = self.storage.get_session_meta(session).get("r2_target")
         return {
             "session_id": session.id,
             "event_id": event.id,
-            "r2_target": r2_session_target(event.id, session.id),
+            "strip_number": session.strip_number,
+            # Preserve legacy targets for already-finalized sessions recovered
+            # after an upgrade; new sessions use the readable event layout.
+            "r2_target": existing_target
+            or r2_named_session_target(
+                event.id,
+                session.id,
+                event.r2_folder,
+                r2_named_strip_stem(event.name, session.strip_number),
+            ),
             "upload_status": session.upload_status,
         }
 

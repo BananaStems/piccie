@@ -41,6 +41,7 @@ def test_clock_sync_falls_back_to_timedatectl(tmp_path, monkeypatch):
 def test_wait_for_clock_accepts_delayed_sync(monkeypatch):
     states = iter([False, False, True])
     sleeps = []
+    monkeypatch.setenv("PICCIE_REQUIRE_TIME_SYNC", "0")
     monkeypatch.setattr(clock, "system_clock_synchronized", lambda: next(states))
     monkeypatch.setattr(clock.time, "monotonic", lambda: 10.0)
     monkeypatch.setattr(clock.time, "sleep", sleeps.append)
