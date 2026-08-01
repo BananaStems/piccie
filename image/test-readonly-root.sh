@@ -114,6 +114,26 @@ test_failed_readonly_enforcement_fails_closed() {
 test_readonly_runtime_mountpoints_are_prepared() {
   grep -Fq "install -d -m 0755 /var/cache/lightdm" "${SETUP}" \
     || fail "LightDM cache mountpoint is not created before lockdown"
+  grep -Fq "install -d -m 0755 /var/lib/systemd/linger" "${SETUP}" \
+    || fail "systemd-logind state directory is not created before lockdown"
+  grep -Fq "piccie-lightdm.conf" "${SETUP}" \
+    || fail "LightDM writable directories are not provisioned by tmpfiles"
+}
+
+test_distro_root_growth_is_disabled() {
+  grep -Fq "systemd-growfs-root.service rpi-resize.service" "${SETUP}" \
+    || fail "distro root-growth services are not masked"
+}
+
+test_ssh_identity_uses_data() {
+  grep -Fq "HostKey /data/ssh/ssh_host_ed25519_key" "${REPO_ROOT}/image/files/sshd-piccie.conf" \
+    || fail "sshd does not use a persistent host identity on /data"
+  grep -Fq "ssh-keygen -q -t ed25519" "${REPO_ROOT}/image/piccie-firstboot-datapart.sh" \
+    || fail "first boot does not generate the persistent SSH host identity"
+  grep -Fq "ssh_host_ed25519_key.pub" "${REPO_ROOT}/image/piccie-firstboot-datapart.sh" \
+    || fail "first boot does not validate both halves of the SSH host identity"
+  grep -Fq "After=piccie-firstboot-datapart.service" "${REPO_ROOT}/image/files/ssh-piccie.conf" \
+    || fail "ssh.service is not ordered after first-boot data setup"
 }
 
 test_smoke_gate_rejects_local_filesystem_failures() {
@@ -132,6 +152,8 @@ for test_name in \
   test_failed_recovery_remount_fails_closed \
   test_failed_readonly_enforcement_fails_closed \
   test_readonly_runtime_mountpoints_are_prepared \
+  test_distro_root_growth_is_disabled \
+  test_ssh_identity_uses_data \
   test_smoke_gate_rejects_local_filesystem_failures; do
   "${test_name}"
   PASS_COUNT=$((PASS_COUNT + 1))

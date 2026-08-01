@@ -72,6 +72,8 @@ fi
 # password auth; the operator's key is provisioned to /data/ssh/authorized_keys.
 install -d /etc/ssh/sshd_config.d
 install -m 644 "${INSTALL_DIR}/image/files/sshd-piccie.conf" /etc/ssh/sshd_config.d/10-piccie.conf
+install -d /etc/systemd/system/ssh.service.d
+install -m 644 "${INSTALL_DIR}/image/files/ssh-piccie.conf" /etc/systemd/system/ssh.service.d/10-piccie.conf
 
 # Baked drop-in configs for read-only root.
 install -d /etc/systemd/system.conf.d /etc/systemd/journald.conf.d /etc/NetworkManager/conf.d
@@ -81,10 +83,14 @@ install -m 644 "${INSTALL_DIR}/image/files/nm-keyfile-path.conf" /etc/NetworkMan
 install -d /etc/polkit-1/rules.d
 install -m 644 "${INSTALL_DIR}/image/files/49-piccie-networkmanager.rules" /etc/polkit-1/rules.d/
 
-# lightdm does not create its cache directory when installed on the Lite base
-# image. The directory must exist before root becomes read-only or systemd
-# cannot mount the tmpfs declared in fstab and drops boot into emergency mode.
+# These state directories must exist before root becomes read-only. lightdm
+# needs writable runtime/cache paths, while systemd-logind's StateDirectory=
+# cannot create /var/lib/systemd/linger on a read-only root. Without the latter,
+# PAM waits for logind and the kiosk session never reaches Openbox/Chromium.
 install -d -m 0755 /var/cache/lightdm
+install -d -m 0755 /var/lib/systemd/linger
+install -d /etc/tmpfiles.d
+install -m 644 "${INSTALL_DIR}/image/files/piccie-lightdm.conf" /etc/tmpfiles.d/piccie-lightdm.conf
 
 # Kiosk launches from openbox autostart, which runs INSIDE pi's X session and so
 # inherits DISPLAY/XAUTHORITY/XDG_RUNTIME_DIR/HOME. A multi-user.target service
@@ -104,9 +110,10 @@ fi
 # its failing network stage stalls boot for minutes. Mask it.
 systemctl mask cloud-init.service cloud-init-local.service cloud-init-main.service \
   cloud-init-network.service cloud-config.service cloud-final.service 2>/dev/null || true
-# Root is mounted ro by the kernel and enforced by piccie-lockdown. Avoid a
-# second distro-owned remount path during early boot.
-systemctl mask systemd-remount-fs.service
+# Root is mounted ro by the kernel and enforced by piccie-lockdown. Disable the
+# distro-owned remount/root-growth paths: Piccie deliberately keeps p2 fixed and
+# owns growth of the final p3 data partition.
+systemctl mask systemd-remount-fs.service systemd-growfs-root.service rpi-resize.service
 
 systemctl daemon-reload
 systemctl enable piccie-grow-data piccie-firstboot-datapart \

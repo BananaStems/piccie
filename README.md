@@ -18,9 +18,23 @@ templates from a phone connected to the same Wi-Fi.
 
 Piccie is self-hosted. The booth stores its own data and uploads finished strips
 directly to a private bucket in your Cloudflare R2 account. After flashing the
-image, fill in the documented `piccie-r2.txt` file on the microSD boot drive.
+image—and before the first boot—you must complete `piccie-r2.txt` with your R2
+credentials and copy it to the top level of the microSD card's boot drive.
 Piccie imports it once and creates seven-day signed guest links without a
-Worker, OAuth client, GitHub connection or public bucket.
+Worker, OAuth client, GitHub connection or public bucket. Wi-Fi is configured
+separately on Piccie's touchscreen during first-time setup.
+
+## Before the first boot
+
+1. Flash the Piccie image with Raspberry Pi Imager and skip its operating-system
+   customisation options.
+2. Reinsert the microSD card into your computer and open its visible boot drive.
+3. Complete the included `piccie-r2.txt` template with your Cloudflare R2
+   credentials, or copy a previously completed file onto the boot drive. The
+   filename must remain exactly `piccie-r2.txt`.
+4. Safely eject the card and boot Piccie. Choose the Wi-Fi network and enter its
+   password on the Piccie touchscreen; Wi-Fi details do not belong in the R2
+   file.
 
 ## Get started
 
@@ -28,7 +42,8 @@ Choose the guide you need:
 
 1. **[Set up the software](docs/software-setup.md)** — download the ready-made
    image, or build it yourself on macOS, Linux or Windows. Then flash the
-   microSD card, complete first boot and run the reliability test.
+   microSD card, add the required R2 file, complete Wi-Fi setup on Piccie and
+   run the reliability test.
 2. **[Build the hardware](docs/hardware.md)** — see the current parts list and
    printed components. STL files and full assembly instructions are coming
    soon.

@@ -44,6 +44,8 @@ TMP="$(mktemp 2>/dev/null || echo /tmp/pbdiag.$$)"
   echo
   echo "### lightdm enabled/active"; systemctl is-enabled lightdm 2>&1; systemctl is-active lightdm 2>&1
   echo "### lightdm log"; journalctl -u lightdm -b --no-pager 2>&1 | tail -40
+  echo "### logind status"; systemctl status systemd-logind --no-pager -l 2>&1 | tail -30
+  echo "### logind log"; journalctl -u systemd-logind -b --no-pager 2>&1 | tail -40
   echo "### sessions"; loginctl --no-pager 2>&1
   echo "### X/openbox/chromium procs"; pgrep -a Xorg 2>&1; pgrep -a openbox 2>&1; pgrep -a chromium 2>&1
   echo "### drm connectors"; for s in /sys/class/drm/card*-HDMI-A-*/status; do [ -e "$s" ] && echo "$s: $(cat "$s" 2>/dev/null)"; done 2>&1

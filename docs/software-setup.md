@@ -5,8 +5,10 @@ steps are:
 
 1. Download the Piccie image, or build it yourself.
 2. Flash the image to a microSD card.
-3. Add the one-time R2 configuration file.
-4. Start the Raspberry Pi and complete onboarding.
+3. Copy the completed one-time `piccie-r2.txt` file to the flashed card's boot
+   drive.
+4. Start the Raspberry Pi, configure Wi-Fi on its touchscreen and complete
+   onboarding.
 5. Test the booth, then run the soak test before using it at an event.
 
 ## What you need
@@ -141,16 +143,19 @@ To continue a failed full build without starting again:
    the downloaded `.img.xz` file or the generated `piccie.img` file from
    `.pi-gen/deploy/`.
 5. Select the microSD card as the storage target.
-6. Select **Next**, skip Raspberry Pi OS customisation if it is offered, and
-   write the image.
+6. Select **Next**, skip all Raspberry Pi OS customisation if it is offered,
+   and write the image. Do not configure Wi-Fi in Raspberry Pi Imager; Piccie
+   asks for the network and password on its own touchscreen.
 7. Wait for verification to finish before removing the card.
 
 Writing the image erases the selected card. Check the storage target carefully.
 
-## 3. Add your R2 settings
+## 3. Copy your R2 settings to the flashed card
 
 After Raspberry Pi Imager finishes, remove and reinsert the microSD card if its
-boot drive is not visible. The drive works on macOS, Windows and Linux.
+boot drive is not visible. The drive works on macOS, Windows and Linux. This
+step is required after every flash and must be completed before the card's first
+boot.
 
 If you build or flash cards from a Piccie source checkout, keep a reusable
 private copy at the project root:
@@ -161,12 +166,14 @@ private copy at the project root:
 
 Fill in the generated `piccie-r2.txt` once. Git ignores this private file. After
 each flash, reinsert the card and run `./image/copy-r2-to-card.sh`. The helper
-validates the settings and copies them only to an identifiable Raspberry Pi
-boot volume. If auto-detection is ambiguous, pass the volume explicitly, such
-as `./image/copy-r2-to-card.sh /Volumes/bootfs`.
+validates the settings and copies them to the top level of an identifiable
+Raspberry Pi boot volume. If auto-detection is ambiguous, pass the volume
+explicitly, such as `./image/copy-r2-to-card.sh /Volumes/bootfs`.
 
-1. Open `piccie-r2.txt` on the microSD boot drive. The file contains the same
-   instructions and blank settings to complete.
+If you are not using the helper:
+
+1. Open the blank `piccie-r2.txt` included on the microSD boot drive, or prepare
+   a copy on your computer. The file contains the same instructions.
 2. Sign in to the [Cloudflare dashboard](https://dash.cloudflare.com/), open
    **Storage & databases → R2**, and create a bucket named `piccie-photos`.
    Leave the bucket private.
@@ -178,7 +185,11 @@ as `./image/copy-r2-to-card.sh /Volumes/bootfs`.
    lines in `piccie-r2.txt`. Cloudflare shows the secret only once.
 6. Leave `JURISDICTION=default` unless the bucket was explicitly created in the
    EU or FedRAMP jurisdiction.
-7. Save the file and safely eject the microSD card.
+7. Save or copy the completed file to the top level of the microSD boot drive,
+   replacing the blank template if necessary. Its name must be exactly
+   `piccie-r2.txt`.
+8. Confirm the file is present on the boot drive, then safely eject the
+   microSD card.
 
 The file should contain only these settings after the comment instructions:
 
@@ -203,6 +214,9 @@ R2 remains private. Piccie creates signed guest download links that work for
 seven days, which is Cloudflare's maximum. Generate a new event link from the
 booth if an older event needs to be shared again.
 
+Do not add a Wi-Fi name or password to `piccie-r2.txt`. Wi-Fi is a separate
+on-device setup step and is stored by the Raspberry Pi's network manager.
+
 ## 4. Complete first boot
 
 Before powering on, connect the touchscreen, camera, active cooling and a
@@ -211,7 +225,7 @@ data partition and automatically restarts once before showing setup. Do not
 remove power or the card during that restart.
 
 1. Insert the flashed microSD card and power on the booth.
-2. Choose the Wi-Fi network used for initial setup.
+2. On the Piccie touchscreen, choose the Wi-Fi network and enter its password.
 3. Confirm that Piccie found and securely imported the R2 file.
 4. Choose an operator PIN.
 5. Add your computer's SSH public key if you want remote updates and access to
