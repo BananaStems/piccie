@@ -36,10 +36,10 @@ html.kiosk *::after {
   --surface-hover: rgba(45, 38, 32, 0.1);
   --border: rgba(45, 38, 32, 0.12);
   --text: #2d2926;
-  --muted: #7a7268;
+  --muted: #6b635b; /* >= 4.5:1 on every piccie paper, field and panel colour */
   --accent: #c45c4a;
   --accent-dim: rgba(196, 92, 74, 0.14);
-  --danger: #c44d62;
+  --danger: #a43e32;
   --space-1: 4px;
   --space-2: 8px;
   --space-3: 12px;
@@ -410,10 +410,14 @@ h3 {
   transform: scale(0.98) translateY(0);
 }
 
-.btn:focus,
-.btn:focus-visible {
+.btn:focus {
   outline: none;
-  box-shadow: none;
+}
+
+/* Touch taps never trigger focus-visible, so this ring only appears for keyboard use. */
+.btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .btn:disabled {
@@ -1013,7 +1017,7 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 .form-error {
   min-height: 1.25rem;
   margin: 0;
-  color: var(--danger, #a43e32);
+  color: var(--danger);
   text-align: center;
 }
 

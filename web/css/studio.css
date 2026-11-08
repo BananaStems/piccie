@@ -8,8 +8,8 @@
 /* Piccie's booth palette: warm paper, terracotta, ink. Studio adds a dark bench
    around the strip so the print reads as the brightest object on screen. */
 :root {
-  --ink: #2d2722;
-  --muted: #6b635c;
+  --ink: #2d2926;
+  --muted: #6b635b;
   --paper: #ece5dc;
   --panel: #fffdf9;
   --field: #f4eee7;
@@ -18,7 +18,7 @@
   --accent-strong: #b4503f;
   --accent-soft: #f6e3de;
   --success: #2f6b4f;
-  --danger: #a3402f;
+  --danger: #a43e32;
   --bench: #36312d;
   --bench-deep: #2b2724;
   --on-bench: rgb(255 250 244 / 78%);
@@ -555,7 +555,7 @@ input[type="range"] { width: 100%; height: 32px; margin: 0; accent-color: var(--
 
 @media (hover: hover) {
   .icon-button:not(:disabled):hover, .action-button:not(:disabled):hover, .option-row:hover, .shape-preset:hover, .font-option:hover { background: var(--field); }
-  .studio-save:not(:disabled):hover { background: #a3473a; }
+  .studio-save:not(:disabled):hover { background: #a8473a; }
   .studio-dock button:hover, .studio-dock .studio-upload:hover { background: rgb(255 250 244 / 8%); }
 }
 @media (prefers-reduced-motion: reduce) {
