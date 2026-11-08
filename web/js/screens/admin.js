@@ -247,7 +247,6 @@ export function renderGalleryScreen({ app, state, render, api, escapeHtml, showC
   const deleteButton = document.getElementById("gallery-delete");
   if (deleteButton) {
     deleteButton.onclick = async () => {
-      const button = deleteButton;
       const sessionId = state.selectedGallerySession?.id;
       const sessionIndex = sessions.findIndex((item) => item.id === sessionId);
       if (sessionIndex < 0) return;
@@ -261,8 +260,8 @@ export function renderGalleryScreen({ app, state, render, api, escapeHtml, showC
         danger: true,
       });
       if (!confirmed) return;
-      button.disabled = true;
-      button.textContent = "Deleting…";
+      deleteButton.disabled = true;
+      deleteButton.textContent = "Deleting…";
       try {
         const result = await api.deleteSession(sessionId);
         const remaining = sessions.filter((item) => item.id !== sessionId);
@@ -279,8 +278,8 @@ export function renderGalleryScreen({ app, state, render, api, escapeHtml, showC
         }
         render();
       } catch (error) {
-        button.disabled = false;
-        button.textContent = "Delete strip";
+        deleteButton.disabled = false;
+        deleteButton.textContent = "Delete strip";
         showGalleryError(error.message);
       }
     };
