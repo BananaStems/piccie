@@ -18,9 +18,9 @@ else
   MARKER="${PICCIE_CLOCK_MARKER:?test clock marker required}"
   CURL="${PICCIE_CURL:?test curl path required}"
   DATE="${PICCIE_DATE:?test date path required}"
-  # Tests default to "not synced" so the host's own NTP state can't skip the HTTPS path.
-  TIMESYNC="${PICCIE_TIMESYNC_MARKER:-/nonexistent}"
-  TIMEDATECTL="${PICCIE_TIMEDATECTL:-false}"
+  # Tests always see "not synced" so the host's own NTP state can't skip the HTTPS path.
+  TIMESYNC=/nonexistent
+  TIMEDATECTL=false
 fi
 
 now="$("${DATE}" -u +%s)"
