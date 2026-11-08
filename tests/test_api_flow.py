@@ -4,6 +4,8 @@ import threading
 import zipfile
 from pathlib import Path
 
+import cv2
+import numpy as np
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -186,12 +188,14 @@ def test_operator_can_delete_one_gallery_strip_without_removing_others(client):
     assert test_client.delete(f"/api/sessions/{first.id}", headers=headers).status_code == 404
 
 
-def test_guest_qr_uses_short_lan_redirect(client, monkeypatch):
+def test_guest_qr_uses_direct_private_r2_page(client):
     test_client, app = client
-    monkeypatch.setattr("engine.api.routes._lan_ip", lambda: "192.168.1.40")
     event = app.state.storage.create_event("Wedding", "2026-08-01", "classic")
     session = app.state.storage.create_session(event.id)
-    signed_url = "https://signed.example/events/event/session/index.html?signature=long"
+    signed_url = (
+        "https://acct.r2.cloudflarestorage.com/photos/events/event/session/index.html"
+        "?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Signature=long"
+    )
     app.state.storage.update_session_upload(
         session.id,
         "complete",
@@ -201,26 +205,39 @@ def test_guest_qr_uses_short_lan_redirect(client, monkeypatch):
     response = test_client.get(f"/api/sessions/{session.id}")
     qr_url = response.json()["guest_qr_url"]
 
-    assert qr_url == f"http://192.168.1.40:8080/api/d/{session.id}"
-    assert len(qr_url) < len(signed_url)
-    redirect = test_client.get(f"/api/d/{session.id}", follow_redirects=False)
-    assert redirect.status_code == 307
-    assert redirect.headers["location"] == signed_url
-    assert redirect.headers["cache-control"] == "no-store"
+    assert qr_url == signed_url
+    assert qr_url.startswith("https://")
+    assert "192.168." not in qr_url
+    assert "localhost" not in qr_url
 
 
-def test_qr_endpoint_renders_short_link_locally(client):
+def test_qr_endpoint_renders_signed_r2_link_locally(client):
     test_client, _app = client
+    signed_url = (
+        "https://0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com/"
+        "piccie-photos/events/11111111-1111-4111-8111-111111111111/sessions/"
+        "22222222-2222-4222-8222-222222222222/index.html"
+        "?X-Amz-Algorithm=AWS4-HMAC-SHA256"
+        "&X-Amz-Content-Sha256=UNSIGNED-PAYLOAD"
+        "&X-Amz-Credential=CFEXAMPLEKEY12345%2F20260801%2Fauto%2Fs3%2Faws4_request"
+        "&X-Amz-Date=20260801T120000Z"
+        "&X-Amz-Expires=604800"
+        "&X-Amz-Signature=8c3ac40fa6c83d64b4516e0c9e5fa94c998bb79131be9ddadf90cefc5ec31033"
+        "&X-Amz-SignedHeaders=host&x-id=GetObject"
+    )
 
     response = test_client.get(
         "/api/qr",
-        params={"data": "http://192.168.1.40:8080/api/d/session-id"},
+        params={"data": signed_url},
     )
 
     assert response.status_code == 200
     assert response.headers["content-type"] == "image/png"
     assert response.headers["cache-control"] == "no-store"
     assert response.content.startswith(b"\x89PNG\r\n\x1a\n")
+    image = cv2.imdecode(np.frombuffer(response.content, dtype=np.uint8), cv2.IMREAD_GRAYSCALE)
+    decoded, _points, _straight = cv2.QRCodeDetector().detectAndDecode(image)
+    assert decoded == signed_url
 
 
 def test_degraded_storage_blocks_capture_session(client, monkeypatch):

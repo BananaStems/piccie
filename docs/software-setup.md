@@ -277,7 +277,8 @@ Before a long reliability run:
 1. Create a test event.
 2. Complete several three-photo sessions.
 3. Confirm each strip appears in the event gallery.
-4. Scan a QR code and download a strip on another device.
+4. Disable Wi-Fi on a phone, scan a QR code over mobile data, and download the
+   strip. Guest downloads must not depend on access to the booth's LAN.
 5. Disconnect Wi-Fi, take another strip, then reconnect and confirm the queued
    upload completes.
 6. Check the camera framing, light, cooling fan and touchscreen response.

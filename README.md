@@ -24,6 +24,9 @@ Piccie imports it once and creates seven-day signed guest links without a
 Worker, OAuth client, GitHub connection or public bucket. Wi-Fi is configured
 separately on Piccie's touchscreen during first-time setup.
 
+Guest QR codes point directly to those private HTTPS R2 links. A guest can use
+mobile data or any Wi-Fi; their phone never needs to join the booth's network.
+
 R2 media is organised by event name and date. For example, an event named
 “Sarah & James” on 14 June 2026 uses `sarah-james-2026-06-14/`, with finished
 strips under `strips/` and the three original captures under `photos/`. Strip

@@ -11,7 +11,7 @@ import zipfile
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import FileResponse, RedirectResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
 
 from engine.atomicio import jpeg_is_intact
 from engine.api.schemas import (
@@ -849,19 +849,6 @@ def get_strip(request: Request, session_id: str):
     return FileResponse(strip)
 
 
-@router.get("/d/{session_id}")
-def guest_download(request: Request, session_id: str):
-    """Turn a short LAN QR URL into the verified, time-limited R2 guest page."""
-    session = request.app.state.storage.get_session(session_id)
-    if not session or not session.r2_strip_url:
-        raise HTTPException(404, "Guest download not found")
-    return RedirectResponse(
-        session.r2_strip_url,
-        status_code=307,
-        headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"},
-    )
-
-
 @router.post("/kiosk/heartbeat")
 def kiosk_heartbeat(request: Request) -> dict:
     """Liveness ping from the kiosk page (every ~5s). The kiosk watchdog thread
@@ -985,11 +972,10 @@ def _session_response(session) -> SessionResponse:
         upload_error=session.upload_error,
         upload_attempts=session.upload_attempts,
         r2_strip_url=session.r2_strip_url,
-        guest_qr_url=(
-            f"http://{_lan_ip()}:8080/api/d/{session.id}"
-            if session.r2_strip_url
-            else None
-        ),
+        # Guests are normally on mobile data or venue Wi-Fi, not the booth's
+        # LAN. Encode the private, time-limited R2 page itself; the booth must
+        # never be part of the guest download path after the upload completes.
+        guest_qr_url=session.r2_strip_url,
         strip_local_url=strip_url,
         photo_local_urls=[
             f"/api/sessions/{session.id}/photos/{index}"
