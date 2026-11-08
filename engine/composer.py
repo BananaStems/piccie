@@ -733,6 +733,28 @@ def render_filtered_photo_preview_jpeg(
         preview.close()
 
 
+GALLERY_THUMB_SIZE = 240
+
+
+def photo_thumbnail(path: Path) -> Path:
+    """Return a small cached copy of a capture for the gallery list.
+
+    A big event lists hundreds of captures; decoding each full photo to draw a
+    ~90 px tile made the Pi's gallery crawl.
+    """
+    thumb = path.with_name(f"thumb-{path.name}")
+    if not thumb.exists():
+        with Image.open(path) as source:
+            # JPEG draft mode downsamples while decoding, far cheaper than resizing after.
+            source.draft("RGB", (GALLERY_THUMB_SIZE, GALLERY_THUMB_SIZE))
+            small = source.convert("RGB")
+        small.thumbnail((GALLERY_THUMB_SIZE, GALLERY_THUMB_SIZE), _RESAMPLE)
+        buf = io.BytesIO()
+        small.save(buf, format="JPEG", quality=80)
+        write_bytes_atomic(thumb, buf.getvalue())
+    return thumb
+
+
 def compose_strip(
     template: Template,
     photos: list[Path],

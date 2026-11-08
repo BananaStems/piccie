@@ -162,13 +162,18 @@ test("capture thumbnails use the selected filter and result QR stays compact", (
   assert.match(appSource, /setInterval\(check, 1000\)/);
 });
 
-test("event gallery exposes confirmed per-strip deletion", () => {
-  assert.match(adminSource, /class="gallery-thumb-row"/);
-  assert.match(adminSource, /data-delete-session=/);
+test("event gallery deletes the selected strip after confirmation", () => {
+  // One Delete button under the selected strip, not one per row.
+  assert.equal(adminSource.match(/class="gallery-delete"/g).length, 1);
+  assert.match(adminSource, /<div class="gallery-strip-panel">[\s\S]*?id="gallery-delete"/);
   assert.match(adminSource, /showConfirm\(\{/);
   assert.match(adminSource, /api\.deleteSession\(sessionId\)/);
   assert.match(apiSource, /deleteSession:[\s\S]+method: "DELETE"/);
-  assert.match(cssSource, /\.gallery-thumb-row\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\) auto;/s);
+});
+
+test("event gallery list loads small cached thumbnails", () => {
+  assert.match(adminSource, /src="\$\{url\}\?thumb=1"/);
+  assert.match(cssSource, /\.gallery-thumb\s*\{[^}]*content-visibility:\s*auto;/s);
 });
 
 test("event share allows large strip and original-photo archives", () => {

@@ -138,6 +138,7 @@ export function renderAdminScreen({
           state.galleryEvent = event;
           state.gallerySessions = await api.listEventSessions(event.id);
           state.selectedGallerySession = state.gallerySessions[0] || null;
+          state.galleryScrollTop = 0;
           state.view = "gallery";
         } else {
           await enterParty(event);
@@ -180,15 +181,15 @@ export function renderGalleryScreen({ app, state, render, api, escapeHtml, showC
       ${sessions.length === 0 ? `<div class="empty-state"><p>No photo strips yet</p></div>` : `
         <div class="gallery-body">
           <div class="gallery-grid drag-scroll">
-            ${sessions.map((session, index) => `<div class="gallery-thumb-row">
-              <button class="gallery-thumb${session.id === selected?.id ? " selected" : ""}" type="button" data-session="${session.id}" aria-label="View photo strip ${sessions.length - index}" aria-pressed="${session.id === selected?.id}">
-                ${session.photo_local_urls.map((url, photoIndex) => `<img src="${url}" alt="Photo ${photoIndex + 1} from strip ${sessions.length - index}" loading="lazy" decoding="async" draggable="false" />`).join("")}
-              </button>
-              <button class="gallery-delete" type="button" data-delete-session="${session.id}" aria-label="Delete photo strip ${sessions.length - index}">Delete</button>
-            </div>`).join("")}
+            ${sessions.map((session, index) => `<button class="gallery-thumb${session.id === selected?.id ? " selected" : ""}" type="button" data-session="${session.id}" aria-label="View photo strip ${sessions.length - index}" aria-pressed="${session.id === selected?.id}">
+                ${session.photo_local_urls.map((url, photoIndex) => `<img src="${url}?thumb=1" alt="Photo ${photoIndex + 1} from strip ${sessions.length - index}" loading="lazy" decoding="async" draggable="false" />`).join("")}
+              </button>`).join("")}
           </div>
           <div class="gallery-detail">
-            <div class="gallery-strip-panel"><img src="${selected.strip_local_url}" alt="Selected photo strip" /></div>
+            <div class="gallery-strip-panel">
+              <img src="${selected.strip_local_url}" alt="Selected photo strip" />
+              <button class="gallery-delete" type="button" id="gallery-delete">Delete strip</button>
+            </div>
             <div class="gallery-qr-panel">${galleryQrMarkup(selected, escapeHtml)}</div>
           </div>
         </div>`}
@@ -198,7 +199,15 @@ export function renderGalleryScreen({ app, state, render, api, escapeHtml, showC
       </nav>
     </div>`;
 
+  const grid = app.querySelector(".gallery-grid");
+  // Any re-render (a delete, for one) keeps the operator's place in a long event.
+  if (grid) {
+    grid.scrollTop = state.galleryScrollTop || 0;
+    grid.addEventListener("scroll", () => { state.galleryScrollTop = grid.scrollTop; }, { passive: true });
+  }
+
   document.getElementById("gallery-back").onclick = () => {
+    state.galleryScrollTop = 0;
     state.galleryEvent = null;
     state.gallerySessions = [];
     state.selectedGallerySession = null;
@@ -235,9 +244,11 @@ export function renderGalleryScreen({ app, state, render, api, escapeHtml, showC
       app.querySelector(".gallery-qr-panel").innerHTML = galleryQrMarkup(next, escapeHtml);
     };
   });
-  app.querySelectorAll(".gallery-delete").forEach((button) => {
-    button.onclick = async () => {
-      const sessionId = button.dataset.deleteSession;
+  const deleteButton = document.getElementById("gallery-delete");
+  if (deleteButton) {
+    deleteButton.onclick = async () => {
+      const button = deleteButton;
+      const sessionId = state.selectedGallerySession?.id;
       const sessionIndex = sessions.findIndex((item) => item.id === sessionId);
       if (sessionIndex < 0) return;
       const shared = Boolean(state.galleryEvent.share_url);
@@ -269,11 +280,11 @@ export function renderGalleryScreen({ app, state, render, api, escapeHtml, showC
         render();
       } catch (error) {
         button.disabled = false;
-        button.textContent = "Delete";
+        button.textContent = "Delete strip";
         showGalleryError(error.message);
       }
     };
-  });
+  }
 
   function showGalleryError(message, title = "Could not delete strip") {
     const overlay = document.createElement("div");

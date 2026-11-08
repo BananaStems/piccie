@@ -711,9 +711,9 @@ input[type="date"]::-webkit-calendar-picker-indicator {
   flex: 0 0 34%;
   min-width: 0;
   overflow-y: auto;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  align-content: start;
+  /* Flex, not grid: grid rows ignore the skipped rows' placeholder height and overlap. */
+  display: flex;
+  flex-direction: column;
   gap: var(--space-3);
   padding: var(--space-1) var(--space-2) var(--space-3) var(--space-1);
   touch-action: pan-y;
@@ -721,6 +721,10 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 
 .gallery-thumb {
   aspect-ratio: 9 / 2;
+  /* Skip layout and paint for the hundreds of rows a big event has off screen. */
+  content-visibility: auto;
+  contain-intrinsic-height: auto 66px;
+  flex-shrink: 0;
   padding: 0;
   overflow: hidden;
   border: 2px solid transparent;
@@ -730,17 +734,11 @@ input[type="date"]::-webkit-calendar-picker-indicator {
   gap: var(--space-1);
 }
 
-.gallery-thumb-row {
-  min-width: 0;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: stretch;
-  gap: var(--space-2);
-}
-
 .gallery-delete {
-  min-width: 70px;
-  padding: 0 var(--space-2);
+  flex: 0 0 auto;
+  align-self: stretch;
+  min-height: 44px;
+  padding: 0 var(--space-3);
   border: 1px solid rgba(255, 92, 122, 0.45);
   border-radius: var(--radius-sm);
   background: rgba(255, 92, 122, 0.08);
@@ -773,8 +771,9 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 }
 
 .gallery-strip-panel img {
+  flex: 1;
+  min-height: 0;
   width: 100%;
-  height: 100%;
   object-fit: contain;
   display: block;
 }
@@ -798,7 +797,8 @@ input[type="date"]::-webkit-calendar-picker-indicator {
   flex: 1;
   min-width: 0;
   display: flex;
-  justify-content: center;
+  flex-direction: column;
+  gap: var(--space-2);
 }
 
 .gallery-qr-panel {

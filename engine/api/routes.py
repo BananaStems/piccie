@@ -38,6 +38,7 @@ from engine.camera_settings import CAMERA_SETTING_OPTIONS
 from engine.capture_delivery import CaptureDeliveryError
 from engine.composer import (
     _layout_metrics,
+    photo_thumbnail,
     render_filtered_photo_preview_jpeg,
     render_strip_preview_jpeg,
     strip_dimensions,
@@ -790,6 +791,7 @@ def get_session_photo(
     session_id: str,
     photo_index: int,
     filtered: bool = False,
+    thumb: bool = False,
 ):
     if photo_index not in (1, 2, 3):
         raise HTTPException(400, "photo_index must be 1, 2, or 3")
@@ -804,6 +806,12 @@ def get_session_photo(
             content=render_filtered_photo_preview_jpeg(path),
             media_type="image/jpeg",
             headers={"Cache-Control": "no-store"},
+        )
+    if thumb:
+        # A session's captures never change, so the kiosk can keep the tile.
+        return FileResponse(
+            photo_thumbnail(path),
+            headers={"Cache-Control": "max-age=604800, immutable"},
         )
     return FileResponse(path)
 

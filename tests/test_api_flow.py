@@ -671,3 +671,28 @@ def test_failed_publish_says_why(client, monkeypatch):
     assert response.status_code == 502
     assert "NotImplemented: CompleteMultipartUpload" in response.json()["detail"]
 
+
+
+def test_gallery_thumbnail_is_small_and_cached(client):
+    from PIL import Image
+
+    test_client, app = client
+    event = app.state.storage.create_event("Wedding", "2099-08-01", "classic")
+    session = app.state.storage.create_session(event.id)
+    photo = Path(session.local_path) / "photo-1.jpg"
+    Image.new("RGB", (1280, 720), "#c0ffee").save(photo)
+
+    response = test_client.get(f"/api/sessions/{session.id}/photos/1?thumb=1")
+
+    assert response.status_code == 200
+    assert "immutable" in response.headers["cache-control"]
+    import io
+
+    assert Image.open(io.BytesIO(response.content)).size == (240, 135)
+    cached = photo.with_name("thumb-photo-1.jpg")
+    assert cached.exists()
+    stamp = cached.stat().st_mtime_ns
+    assert test_client.get(f"/api/sessions/{session.id}/photos/1?thumb=1").status_code == 200
+    assert cached.stat().st_mtime_ns == stamp
+    # The full photo is unchanged for everything else that uses it.
+    assert test_client.get(f"/api/sessions/{session.id}/photos/1").content == photo.read_bytes()
