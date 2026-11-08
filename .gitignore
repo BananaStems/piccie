@@ -13,3 +13,5 @@ deploy/
 .claude/
 node_modules/
 .wrangler/
+.impeccable/review/
+.impeccable/mocks/

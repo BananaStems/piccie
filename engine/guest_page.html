@@ -1,0 +1,273 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="referrer" content="no-referrer">
+<meta name="robots" content="noindex,nofollow">
+<meta name="theme-color" content="#f2ebe3">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src https:; connect-src https:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none';">
+<title>Your photo strip | Piccie</title>
+<script>
+// The print plays once per strip on this phone; repeat visits and reduced motion open finished.
+(() => {
+  let seen = false;
+  try { seen = localStorage.getItem("piccie-printed:" + location.pathname) === "1"; } catch (error) {}
+  if (!seen && !matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    document.documentElement.classList.add("printing");
+  }
+})();
+</script>
+<style>
+:root{color-scheme:light;--paper:#f2ebe3;--ink:#2d2926;--muted:#6b635b;--accent:#c45c4a;--accent-down:#a8473a;
+--top:env(safe-area-inset-top,0px);--bottom:env(safe-area-inset-bottom,0px);
+--actions:calc(126px + var(--bottom));--printer-h:calc(var(--top) + 142px);--printer-w:min(calc(100vw + 24px),520px)}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+html,body{height:100%}
+body{margin:0;overflow:hidden;color:var(--ink);font:16px/1.35 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+background:radial-gradient(120% 75% at 50% 40%,#f8f3ed 0%,var(--paper) 58%,#e8dfd3 100%) fixed var(--paper)}
+::selection{background:#c45c4a40}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+
+/* The finished state is the default; html.printing only adds the machine and the starting positions. */
+.stage{position:fixed;inset:0;display:grid;place-items:center;padding:calc(20px + var(--top)) 16px var(--actions)}
+.print{width:min(calc((100vh - 20px - var(--top) - var(--actions)) / 3),100%);aspect-ratio:1/3;transform-origin:50% 0;
+filter:drop-shadow(0 1px 1px rgba(45,41,38,.16)) drop-shadow(0 14px 20px rgba(45,41,38,.2))}
+@supports (height:100svh){.print{width:min(calc((100svh - 20px - var(--top) - var(--actions)) / 3),100%)}}
+.paper{position:relative;height:100%;overflow:hidden;background:#fff}
+.paper img{display:block;width:100%;height:100%;object-fit:contain}
+.haze{display:none;position:absolute;left:0;right:0;top:0;height:300%;pointer-events:none;
+background:linear-gradient(to bottom,#cdc6bc 0 42%,rgba(205,198,188,.55) 50%,rgba(205,198,188,0) 58%)}
+
+.printer,.shade{display:none}
+.printing .printer{display:block;position:fixed;z-index:1;top:0;left:50%;width:var(--printer-w);height:var(--printer-h);
+margin-left:calc(var(--printer-w) / -2);border-radius:0 0 22px 22px;overflow:hidden;
+background:linear-gradient(180deg,#fdfbf7 0%,#f9f5ef 55%,#f3eee6 100%);
+box-shadow:0 2px 3px rgba(60,44,34,.16),0 20px 30px -14px rgba(60,44,34,.45)}
+.grain{position:absolute;inset:0;width:100%;height:100%;opacity:.45;mix-blend-mode:multiply}
+.logo{position:absolute;left:50%;top:calc(var(--top) + 20px);margin-left:-56px;overflow:visible}
+/* Under-lip tier: a recessed band that carries the slot, with the body's rounded lower edge below it. */
+.lip{position:absolute;left:0;right:0;bottom:0;height:46px;
+background:linear-gradient(#e6dfd5 0,#ede7de 40%,#e9e2d8 82%,#d6cdc0 89%,#c9bfb1 100%);
+box-shadow:inset 0 1px 0 rgba(80,62,48,.18),inset 0 2px 0 rgba(255,255,255,.7)}
+.slot{position:absolute;left:50%;top:12px;height:9px;width:var(--slot-w,172px);margin-left:calc(var(--slot-w,172px) / -2);border-radius:2px;
+background:linear-gradient(#030202 0%,#120f0d 55%,#2b2420 100%);box-shadow:inset 0 3px 3px rgba(0,0,0,.85),0 -1px 0 rgba(80,62,48,.3)}
+.slot::after{content:"";position:absolute;left:-3px;right:-3px;top:100%;height:3px;border-radius:0 0 2px 2px;
+background:linear-gradient(#fffdf9,#efe8de);box-shadow:0 1px 1px rgba(80,62,48,.18)}
+.printing .shade{display:block;position:fixed;z-index:3;top:var(--shade-top,0);left:50%;height:14px;opacity:0;
+width:var(--shade-w,120px);margin-left:calc(var(--shade-w,120px) / -2);background:linear-gradient(rgba(25,18,13,.34),rgba(25,18,13,0))}
+.printing .stage{z-index:2}
+.printing .paper{clip-path:inset(100% 0 0 0)}
+.printing .haze{display:block;transform:translateY(-8.333%)}
+
+.actions{position:fixed;z-index:4;left:0;right:0;bottom:0;display:flex;flex-direction:column;align-items:center;gap:8px;
+padding:0 16px calc(22px + var(--bottom))}
+.save{display:inline-flex;align-items:center;justify-content:center;gap:10px;min-width:232px;min-height:56px;padding:0 26px;
+border:0;border-radius:16px;background:var(--accent);color:#fff;font:700 19px/1 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+text-decoration:none;cursor:pointer;-webkit-tap-highlight-color:transparent;
+box-shadow:inset 0 1px 0 rgba(255,255,255,.22),0 2px 4px rgba(45,41,38,.16),0 14px 26px -10px rgba(143,32,28,.5);
+transition:background-color .15s ease-out,transform .15s ease-out}
+@media (hover:hover){.save:hover{background:#b9513f}}
+.save:active{background:var(--accent-down);transform:translateY(1px)}
+.save:focus-visible{outline:3px solid var(--ink);outline-offset:3px}
+.save svg{width:20px;height:20px;flex:none}
+.printing #download-strip,.printing .note{opacity:0}
+.note{margin:0;max-width:340px;text-align:center;color:var(--muted);font-size:.86rem}
+.note strong{color:var(--ink)}
+.status{position:absolute;left:16px;right:16px;bottom:calc(38px + var(--bottom));margin:0;text-align:center;color:var(--muted);font-size:.95rem}
+.status.error{position:static;max-width:300px;color:var(--ink)}
+@media (prefers-reduced-motion:reduce){.save{transition:none}}
+</style></head><body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false"><defs>
+<symbol id="wm" viewBox="0 0 1834 963"><g transform="translate(12.00 734.00) scale(1 -1)"> <path d="M27 -205Q12 -205 12 -194Q12 -183 25 -182L39 -180Q60 -177 66.5 -168.0Q73 -159 73 -138V403Q73 421 67.5 427.5Q62 434 48 436L27 439Q14 440 14 450Q14 458 30 461Q61 466 77.5 477.0Q94 488 112 504Q121 513 127 513Q136 513 136 501V470Q136 463 142.0 460.5Q148 458 156 466L167 477Q187 497 208.0 506.5Q229 516 256 516Q302 516 337.5 485.5Q373 455 393.5 401.0Q414 347 414 274Q414 191 388.0 127.0Q362 63 316.5 27.0Q271 -9 212 -9Q182 -9 159 2Q141 10 141 -9V-138Q141 -159 147.5 -166.5Q154 -174 175 -177L212 -182Q223 -184 223 -193Q223 -205 208 -205ZM215 16Q271 16 305.5 82.0Q340 148 340 260Q340 363 310.0 417.0Q280 471 225 471Q191 471 166.0 443.0Q141 415 141 365V113Q141 68 161.5 42.0Q182 16 215 16Z" transform="translate(0 0)"/><path d="M114 605Q93 605 78.5 620.0Q64 635 64 658Q64 681 78.5 695.5Q93 710 114 710Q135 710 149.0 695.5Q163 681 163 658Q163 635 149.0 620.0Q135 605 114 605ZM30 0Q15 0 15 11Q15 20 28 23L40 25Q65 29 72.0 37.5Q79 46 79 67V403Q79 421 73.5 427.5Q68 434 54 436L33 439Q20 440 20 450Q20 458 36 461Q67 466 86.0 477.0Q105 488 123 504Q132 513 138 513Q147 513 147 501V67Q147 46 153.0 37.0Q159 28 176 26L201 23Q212 21 212 12Q212 0 197 0Z" transform="translate(424 0)"/><path d="M180 -9Q136 -9 100.5 20.5Q65 50 44.0 105.0Q23 160 23 236Q23 321 48.5 384.0Q74 447 118.0 481.5Q162 516 216 516Q262 516 288 498Q298 491 298 476L300 354Q300 339 288 339Q277 339 274 352Q260 407 247.0 437.0Q234 467 220.0 478.5Q206 490 189 490Q169 490 147.5 467.0Q126 444 111.5 392.5Q97 341 97 257Q97 150 124.5 96.0Q152 42 196 42Q231 42 254.5 71.0Q278 100 295 176Q298 187 307 187Q319 187 316 167Q305 97 285.5 58.5Q266 20 239.5 5.5Q213 -9 180 -9Z" transform="translate(627 0)"/><path d="M180 -9Q136 -9 100.5 20.5Q65 50 44.0 105.0Q23 160 23 236Q23 321 48.5 384.0Q74 447 118.0 481.5Q162 516 216 516Q262 516 288 498Q298 491 298 476L300 354Q300 339 288 339Q277 339 274 352Q260 407 247.0 437.0Q234 467 220.0 478.5Q206 490 189 490Q169 490 147.5 467.0Q126 444 111.5 392.5Q97 341 97 257Q97 150 124.5 96.0Q152 42 196 42Q231 42 254.5 71.0Q278 100 295 176Q298 187 307 187Q319 187 316 167Q305 97 285.5 58.5Q266 20 239.5 5.5Q213 -9 180 -9Z" transform="translate(946 0)"/><path d="M114 605Q93 605 78.5 620.0Q64 635 64 658Q64 681 78.5 695.5Q93 710 114 710Q135 710 149.0 695.5Q163 681 163 658Q163 635 149.0 620.0Q135 605 114 605ZM30 0Q15 0 15 11Q15 20 28 23L40 25Q65 29 72.0 37.5Q79 46 79 67V403Q79 421 73.5 427.5Q68 434 54 436L33 439Q20 440 20 450Q20 458 36 461Q67 466 86.0 477.0Q105 488 123 504Q132 513 138 513Q147 513 147 501V67Q147 46 153.0 37.0Q159 28 176 26L201 23Q212 21 212 12Q212 0 197 0Z" transform="translate(1265 0)"/><path d="M192 -9Q144 -9 106.0 23.0Q68 55 45.5 113.5Q23 172 23 249Q23 328 46.0 388.0Q69 448 109.0 482.0Q149 516 198 516Q257 516 293.5 467.5Q330 419 330 310Q330 277 305 277H115Q95 277 95 254Q95 148 126.0 95.0Q157 42 205 42Q243 42 267.0 69.0Q291 96 306 160Q309 171 319 171Q331 171 328 151Q312 62 277.0 26.5Q242 -9 192 -9ZM112 302H213Q261 302 261 352Q261 417 245.0 454.0Q229 491 197 491Q158 491 131.5 446.0Q105 401 97 318Q95 302 112 302Z" transform="translate(1468 0)"/> </g></symbol>
+<filter id="emboss" x="-10%" y="-20%" width="120%" height="150%" color-interpolation-filters="sRGB">
+<feGaussianBlur in="SourceAlpha" stdDeviation="1.1" result="bump"/>
+<feDiffuseLighting in="bump" surfaceScale="1.9" diffuseConstant="1.55" lighting-color="#fff" result="diffuse"><feDistantLight azimuth="235" elevation="38"/></feDiffuseLighting>
+<feSpecularLighting in="bump" surfaceScale="1.9" specularConstant=".38" specularExponent="14" lighting-color="#fff" result="shine"><feDistantLight azimuth="235" elevation="38"/></feSpecularLighting>
+<feComposite in="diffuse" in2="SourceAlpha" operator="in" result="diffuseIn"/>
+<feComposite in="shine" in2="SourceAlpha" operator="in" result="shineIn"/>
+<feBlend in="SourceGraphic" in2="diffuseIn" mode="multiply" result="lit"/>
+<feComposite in="lit" in2="shineIn" operator="arithmetic" k2="1" k3=".6" result="face"/>
+<feGaussianBlur in="SourceAlpha" stdDeviation="1.3" result="blur"/>
+<feOffset in="blur" dy="1.6" result="drop"/>
+<feFlood flood-color="#3c2c22" flood-opacity=".22"/>
+<feComposite in2="drop" operator="in" result="cast"/>
+<feMerge><feMergeNode in="cast"/><feMergeNode in="face"/></feMerge>
+</filter>
+<filter id="grain"><feTurbulence type="fractalNoise" baseFrequency=".85" numOctaves="2" stitchTiles="stitch"/>
+<feColorMatrix values="0 0 0 0 .42 0 0 0 0 .36 0 0 0 0 .3 0 0 0 .16 0"/></filter>
+</defs></svg>
+<h1 class="sr">Your piccie photo strip</h1>
+<div class="printer" aria-hidden="true">
+<svg class="grain"><rect width="100%" height="100%" filter="url(#grain)"/></svg>
+<svg class="logo" width="112" height="59"><g filter="url(#emboss)"><use href="#wm" width="112" height="59" fill="#faf7f2"/></g></svg>
+<div class="lip"><div class="slot"></div></div>
+</div>
+<div class="shade" aria-hidden="true"></div>
+<main class="stage"><div class="print"><div class="paper">
+<img id="strip" src="__STRIP_URL__" width="600" height="1800" alt="Your piccie photo strip">
+<div class="haze" aria-hidden="true"></div>
+</div></div></main>
+<div class="actions">
+<p id="status" class="status" role="status">Loading your strip</p>
+<a id="download-strip" class="save" href="__STRIP_URL__" download="piccie-photo-strip.jpg"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11m0 0-4.5-4.5M12 15l4.5-4.5M5 19.5h14"/></svg><span id="save-label">Download</span></a>
+<button id="retry" class="save" type="button" hidden>Try again</button>
+<p id="save-note" class="note" hidden>Press and hold the photo, then tap <strong>Save to Photos</strong>.</p>
+</div>
+<script>
+(() => {
+  const root = document.documentElement;
+  const image = document.getElementById("strip");
+  const status = document.getElementById("status");
+  const button = document.getElementById("download-strip");
+  const retry = document.getElementById("retry");
+  const note = document.getElementById("save-note");
+  const printing = root.classList.contains("printing");
+  let started = false;
+
+  const loaded = new Promise((resolve, reject) => {
+    if (image.complete) return image.naturalWidth ? resolve() : reject(); // complete is also true for a broken image
+    image.addEventListener("load", resolve, {once: true});
+    image.addEventListener("error", reject, {once: true});
+  }); // no image.decode(): it can stay pending while the page is not painting, which would hide the save button
+
+  // Only the hidden save controls are inert during the print; the status stays audible.
+  button.inert = note.inert = printing;
+  setTimeout(() => {
+    if (!started && !status.classList.contains("error")) {
+      status.textContent = "Still loading. The signal here is slow.";
+    }
+  }, 4000);
+
+  loaded.then(() => {
+    started = true;
+    if (!printing) {
+      status.hidden = true;
+      return;
+    }
+    status.textContent = "Printing your strip";
+    try {
+      printStrip();
+    } catch (error) {
+      // Never strand the strip or the save button behind a failed animation. No `?.` here:
+      // the browsers without Web Animations are the same ones that cannot parse it.
+      finish(document.getAnimations ? document.getAnimations() : []);
+    }
+  }, () => {
+    status.textContent = "Your strip didn’t load. Check your signal, then try again.";
+    status.classList.add("error");
+    button.hidden = true;
+    retry.hidden = false;
+  });
+  retry.addEventListener("click", () => location.reload());
+
+  function finish(animations = []) {
+    root.classList.remove("printing");
+    status.hidden = true;
+    button.inert = note.inert = false;
+    for (const animation of animations) animation.cancel();
+  }
+
+  function printStrip() {
+    const print = document.querySelector(".print");
+    const paper = document.querySelector(".paper");
+    const printer = document.querySelector(".printer");
+    const shade = document.querySelector(".shade");
+    const box = print.getBoundingClientRect();
+    const slot = printer.querySelector(".slot").getBoundingClientRect();
+    const S = 0.58;
+    const dy = slot.top + slot.height / 2 - box.top;
+    root.style.setProperty("--slot-w", Math.round(box.width * S + 26) + "px");
+    root.style.setProperty("--shade-w", Math.round(box.width * S) + "px");
+    root.style.setProperty("--shade-top", Math.round(slot.top + slot.height / 2) + "px");
+
+    // Three feeds with a short hold between them, a small drop as the rollers let go, then the zoom.
+    const T = 2050;
+    const STEP = "cubic-bezier(.3,.7,.35,1)";
+    const ZOOM = "cubic-bezier(.2,.75,.15,1)";
+    const path = [
+      [0, 0, 0, STEP], [300, .34, 0, "linear"], [390, .34, 0, STEP], [690, .68, 0, "linear"],
+      [780, .68, 0, STEP], [1080, 1, 0, "cubic-bezier(.45,0,.85,.5)"], [1200, 1, 8, "linear"], [1380, 1, 8, ZOOM],
+    ];
+    const moves = path.map(([ms, fed, drop, easing]) => ({
+      offset: ms / T, easing,
+      transform: `translateY(${dy + drop}px) scale(${S}) translateY(${(fed - 1) * 100}%)`,
+    }));
+    moves.push({offset: 1, transform: "translateY(0px) scale(1) translateY(0%)"});
+    const clips = path.map(([ms, fed, , easing]) => ({offset: ms / T, easing, clipPath: `inset(${(1 - fed) * 100}% 0% 0% 0%)`}));
+    clips.push({offset: 1, clipPath: "inset(0% 0% 0% 0%)"});
+    const lift = [{transform: "translateY(0)"}, {transform: `translateY(${-printer.offsetHeight - 40}px)`}];
+    const liftTiming = {delay: 1380, duration: 470, easing: "cubic-bezier(.55,0,.8,.25)", fill: "forwards"};
+    const rise = [{opacity: 0, transform: "translateY(16px)"}, {opacity: 1, transform: "translateY(0)"}];
+    const riseTiming = {delay: 1750, duration: 380, easing: ZOOM, fill: "forwards"};
+
+    const animations = [
+      print.animate(moves, {duration: T, fill: "forwards"}),
+      paper.animate(clips, {duration: T, fill: "forwards"}),
+      paper.querySelector(".haze").animate(
+        [{transform: "translateY(-8.333%)"}, {transform: "translateY(-58.333%)"}],
+        {delay: 200, duration: 1500, easing: "cubic-bezier(.4,.1,.6,1)", fill: "forwards"},
+      ),
+      shade.animate(
+        [{opacity: 0}, {opacity: 1, offset: .07}, {opacity: 1, offset: .53}, {opacity: 0, offset: .59}, {opacity: 0}],
+        {duration: T, fill: "forwards"},
+      ),
+      printer.animate(lift, liftTiming),
+      shade.animate(lift, liftTiming),
+      status.animate([{opacity: 1}, {opacity: 0}], {delay: 1300, duration: 200, fill: "forwards"}),
+      button.animate(rise, riseTiming),
+      note.animate(rise, riseTiming),
+    ];
+    Promise.all(animations.map((animation) => animation.finished)).then(() => {
+      finish(animations);
+      try { localStorage.setItem("piccie-printed:" + location.pathname, "1"); } catch (error) {}
+    }, () => finish(animations));
+  }
+})();
+
+(() => {
+  const button = document.getElementById("download-strip");
+  const label = document.getElementById("save-label");
+  const note = document.getElementById("save-note");
+  const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+    (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+  if (!isIOS) return;
+
+  button.removeAttribute("download");
+  note.hidden = false;
+  const imageUrl = button.href;
+  if (!navigator.share || typeof File !== "function") {
+    label.textContent = "Open photo";
+    return;
+  }
+
+  label.textContent = "Preparing photo";
+  let photoFile = null;
+  fetch(imageUrl, {cache: "force-cache"})
+    .then((response) => {
+      if (!response.ok) throw new Error("Photo download failed");
+      return response.blob();
+    })
+    .then((blob) => {
+      const file = new File([blob], "piccie-photo-strip.jpg", {
+        type: blob.type || "image/jpeg",
+      });
+      if (navigator.canShare && !navigator.canShare({files: [file]})) {
+        throw new Error("Photo sharing is unavailable");
+      }
+      photoFile = file;
+      label.textContent = "Save to Photos";
+      note.textContent = "Tap Save to Photos, then choose Save Image.";
+    })
+    .catch(() => {
+      label.textContent = "Open photo";
+    });
+
+  button.addEventListener("click", (event) => {
+    if (!photoFile) return;
+    event.preventDefault();
+    navigator.share({files: [photoFile]}).catch((error) => {
+      if (error.name !== "AbortError") window.location.assign(imageUrl);
+    });
+  });
+})();
+</script></body></html>

@@ -37,6 +37,7 @@ REFRESH_MARGIN_SECONDS = 24 * 60 * 60
 # Cloudflare blocks urllib's default User-Agent on proxied custom domains (error 1010).
 USER_AGENT = "Mozilla/5.0 (compatible; Piccie)"
 PUBLIC_CACHE_CONTROL = "private"  # no edge cache, so deletions take effect at once
+GUEST_PAGE = Path(__file__).with_name("guest_page.html").read_text(encoding="utf-8")
 
 
 def signed_url_expiring(url: str) -> bool:
@@ -409,80 +410,7 @@ class R2Uploader:
     @staticmethod
     def _session_html(strip_url: str) -> bytes:
         image_url = html.escape(strip_url, quote=True)
-        document = f"""<!doctype html>
-<html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="referrer" content="no-referrer">
-<meta name="robots" content="noindex,nofollow">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src https:; connect-src https:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none';">
-<title>Your photo strip | Piccie</title>
-<style>
-:root{{color-scheme:light;--ink:#2c1723;--muted:#735d69;--paper:#fff7fb;--accent:#c75543}}
-*{{box-sizing:border-box}}html,body{{height:100%}}body{{margin:0;background:var(--paper);color:var(--ink);
-font:16px/1.35 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}}
-main{{width:min(100%,480px);min-height:100svh;margin:auto;padding:max(12px,env(safe-area-inset-top))
-12px calc(116px + env(safe-area-inset-bottom));}}header{{text-align:center;margin-bottom:8px}}.brand{{margin:0;color:var(--accent);font-size:.72rem;font-weight:800;
-letter-spacing:.18em;text-transform:uppercase}}
-.photo{{width:100%}}.photo img{{display:block;width:100%;height:auto;border-radius:0}}
-.actions{{position:fixed;z-index:1;left:0;right:0;bottom:0;padding:10px 12px max(10px,env(safe-area-inset-bottom));
-background:var(--paper);border-top:1px solid #d9cbd2;text-align:center}}.actions-inner{{width:min(100%,456px);margin:auto}}
-.download{{display:flex;align-items:center;justify-content:center;width:100%;
-min-height:50px;padding:10px 18px;border-radius:12px;background:var(--accent);color:#fff;text-decoration:none;font-weight:750;
-box-shadow:0 7px 20px #9e3f3029}}.download:focus-visible{{outline:3px solid var(--ink);outline-offset:3px}}
-.note{{margin:8px 2px 0;color:var(--muted);font-size:.84rem;line-height:1.3}}.note strong{{color:var(--ink)}}
-@supports(min-height:100dvh){{main{{min-height:100dvh}}}}
-</style></head><body><main><header><p class="brand">Piccie</p></header>
-<div class="photo"><img src="{image_url}" alt="Your Piccie photo strip"></div>
-<div class="actions"><div class="actions-inner"><a id="download-strip" class="download" href="{image_url}" download="piccie-photo-strip.jpg">Download</a>
-<p id="save-note" class="note" hidden>Press and hold the photo, then tap <strong>Save to Photos</strong>.</p></div></div>
-</main><script>
-(() => {{
-  const button = document.getElementById("download-strip");
-  const note = document.getElementById("save-note");
-  const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
-    (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
-  if (!isIOS) return;
-
-  button.removeAttribute("download");
-  note.hidden = false;
-  const imageUrl = button.href;
-  if (!navigator.share || typeof File !== "function") {{
-    button.textContent = "Open photo";
-    return;
-  }}
-
-  button.textContent = "Preparing photo";
-  let photoFile = null;
-  fetch(imageUrl, {{cache: "force-cache"}})
-    .then((response) => {{
-      if (!response.ok) throw new Error("Photo download failed");
-      return response.blob();
-    }})
-    .then((blob) => {{
-      const file = new File([blob], "piccie-photo-strip.jpg", {{
-        type: blob.type || "image/jpeg",
-      }});
-      if (navigator.canShare && !navigator.canShare({{files: [file]}})) {{
-        throw new Error("Photo sharing is unavailable");
-      }}
-      photoFile = file;
-      button.textContent = "Save to Photos";
-      note.textContent = "Tap Save to Photos, then choose Save Image.";
-    }})
-    .catch(() => {{
-      button.textContent = "Open photo";
-    }});
-
-  button.addEventListener("click", (event) => {{
-    if (!photoFile) return;
-    event.preventDefault();
-    navigator.share({{files: [photoFile]}}).catch((error) => {{
-      if (error.name !== "AbortError") window.location.assign(imageUrl);
-    }});
-  }});
-}})();
-</script></body></html>"""
-        return document.encode("utf-8")
+        return GUEST_PAGE.replace("__STRIP_URL__", image_url).encode("utf-8")
 
     def _event_strip_keys(self, event_id: str, event_folder: str | None) -> list[str]:
         prefixes = []

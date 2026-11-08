@@ -119,23 +119,18 @@ def test_r2_waits_for_clock_before_every_signed_operation(tmp_path, monkeypatch)
     assert len(waits) == 4
 
 
-def test_session_page_uses_full_width_strip_and_fixed_download_menu():
+def test_session_page_prints_strip_once_then_shows_floating_save():
     page = R2Uploader._session_html(
         "https://signed.example/strip.jpg?x=1&signature=two"
     ).decode()
 
-    assert 'min-height:100svh' in page
-    assert 'min-height:100dvh' in page
-    assert '.photo{width:100%}' in page
-    assert '.photo img{display:block;width:100%;height:auto' in page
-    assert 'border-radius:0' in page
-    assert 'position:fixed' in page
-    assert 'bottom:0' in page
-    assert 'class="actions-inner"' in page
-    assert page.index('class="photo"') < page.index('id="download-strip"')
-    assert "<h1>" not in page
-    assert ">Download</a>" in page
-    assert "Download photo strip" not in page
+    assert "__STRIP_URL__" not in page
+    assert page.count('src="https://signed.example/strip.jpg?x=1&amp;signature=two"') == 1
+    assert 'localStorage.getItem("piccie-printed:" + location.pathname)' in page
+    assert "prefers-reduced-motion: reduce" in page
+    assert page.index('id="strip"') < page.index('id="download-strip"')
+    assert '<span id="save-label">Download</span></a>' in page
+    assert "Your strip didn’t load. Check your signal, then try again." in page
     assert "Press and hold the photo" in page
     assert "Save to Photos" in page
     assert "/iPad|iPhone|iPod/" in page
