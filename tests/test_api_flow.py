@@ -441,7 +441,6 @@ def test_phone_studio_pairs_installs_and_archives_template(client, monkeypatch):
     archived = test_client.post(f"/api/templates/{template_id}/archive")
     assert archived.status_code == 200
     assert archived.json()["archived"] is True
-    assert archived.json()["event_count"] == 1
     assert app.state.templates.load(event.template_id).archived is True
     assert test_client.delete(f"/api/templates/{template_id}").status_code == 409
 

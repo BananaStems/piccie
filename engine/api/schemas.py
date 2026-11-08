@@ -140,7 +140,6 @@ class TemplateResponse(BaseModel):
     photo_height: int = 400
     custom: bool = False
     archived: bool = False
-    event_count: int = 0
     created_at: str | None = None
 
 

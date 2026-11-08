@@ -311,7 +311,8 @@ export function renderGalleryScreen({ app, state, render, api, escapeHtml, showC
       <p class="confirm-message" id="share-progress-label">Starting…</p>
       <div class="share-progress" role="progressbar" aria-labelledby="share-progress-label" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div></div></div>
     </section>`;
-    document.getElementById("booth-frame").appendChild(overlay);
+    // A link that is still valid comes back at once; don't flash the dialog for it.
+    const shown = setTimeout(() => document.getElementById("booth-frame").appendChild(overlay), 300);
     const label = overlay.querySelector("#share-progress-label");
     const bar = overlay.querySelector(".share-progress");
     const mb = (bytes) => (bytes / 1e6).toFixed(bytes < 1e7 ? 1 : 0);
@@ -330,6 +331,7 @@ export function renderGalleryScreen({ app, state, render, api, escapeHtml, showC
     try {
       return await publish();
     } finally {
+      clearTimeout(shown);
       clearInterval(timer);
       overlay.remove();
     }

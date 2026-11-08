@@ -697,12 +697,7 @@ def _template_response(template) -> TemplateResponse:
 @router.get("/templates", response_model=list[TemplateResponse])
 def list_templates(request: Request) -> list[TemplateResponse]:
     registry: TemplateRegistry = request.app.state.templates
-    responses = []
-    for template in registry.list_templates():
-        item = _template_response(template)
-        item.event_count = request.app.state.storage.template_event_count(template.id)
-        responses.append(item)
-    return responses
+    return [_template_response(template) for template in registry.list_templates()]
 
 
 @router.post("/templates/pair")
@@ -728,9 +723,7 @@ def archive_template(request: Request, template_id: str) -> TemplateResponse:
         raise HTTPException(404, "Template not found") from exc
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
-    item = _template_response(template)
-    item.event_count = request.app.state.storage.template_event_count(template.id)
-    return item
+    return _template_response(template)
 
 
 @router.post("/templates/{template_id}/restore", response_model=TemplateResponse)
@@ -743,9 +736,7 @@ def restore_template(request: Request, template_id: str) -> TemplateResponse:
         raise HTTPException(404, "Template not found") from exc
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
-    item = _template_response(template)
-    item.event_count = request.app.state.storage.template_event_count(template.id)
-    return item
+    return _template_response(template)
 
 
 @router.delete("/templates/{template_id}", status_code=204)

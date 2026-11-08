@@ -177,7 +177,7 @@ test("event gallery list loads small cached thumbnails", () => {
 });
 
 test("event share allows large strip and original-photo archives", () => {
-  assert.match(apiSource, /createEventShare:[\s\S]+timeoutMs: 900000/);
+  assert.match(apiSource, /createEventShare:[\s\S]+timeoutMs: 3600000/);
   assert.match(adminSource, /download every strip and original photo/);
 });
 
