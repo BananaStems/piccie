@@ -561,8 +561,11 @@ class Storage:
                 """,
                 (event_id,),
             ).fetchall()
+            # Tombstone each cleared strip, never the whole sessions/ prefix:
+            # strips guests take after the clear must survive a deletion that is
+            # still waiting for Wi-Fi.
             targets = self._collect_r2_targets(session_rows)
-            targets.append(f"event-content:{event_id}")
+            targets.append(f"event-archive:{event_id}")
             targets.append(f"named-event-archive:{event_id}:{row['r2_folder']}")
             if row["share_token"]:
                 targets.append(

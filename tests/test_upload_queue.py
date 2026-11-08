@@ -58,7 +58,7 @@ def test_delete_requested_during_upload_wins(tmp_path, monkeypatch):
             ok, targets = storage.clear_event_photos(event.id)
             assert ok and targets == [
                 target,
-                f"event-content:{event.id}",
+                f"event-archive:{event.id}",
                 f"named-event-archive:{event.id}:{event.r2_folder}",
             ]
             return "https://photos.example.com/strip"
@@ -78,7 +78,7 @@ def test_delete_requested_during_upload_wins(tmp_path, monkeypatch):
 
     assert uploader.deleted == [target]
     assert storage.pending_r2_deletions() == [
-        f"event-content:{event.id}",
+        f"event-archive:{event.id}",
         f"named-event-archive:{event.id}:{event.r2_folder}",
     ]
     assert storage.get_session(session.id) is None

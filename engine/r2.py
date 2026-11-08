@@ -8,6 +8,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from datetime import datetime, timezone
 from pathlib import Path
 
 import boto3
@@ -28,6 +29,19 @@ from engine.paths import (
 
 logger = logging.getLogger(__name__)
 GUEST_LINK_EXPIRY_SECONDS = 7 * 24 * 60 * 60
+REFRESH_MARGIN_SECONDS = 24 * 60 * 60
+
+
+def signed_url_expiring(url: str) -> bool:
+    """True when a SigV4 presigned URL expires within REFRESH_MARGIN_SECONDS."""
+    query = urllib.parse.parse_qs(urllib.parse.urlsplit(url).query)
+    try:
+        signed_at = datetime.strptime(query["X-Amz-Date"][0], "%Y%m%dT%H%M%SZ")
+        lifetime = int(query["X-Amz-Expires"][0])
+    except (KeyError, ValueError):
+        return False  # not a presigned URL; nothing to refresh
+    age = datetime.now(timezone.utc) - signed_at.replace(tzinfo=timezone.utc)
+    return age.total_seconds() >= lifetime - REFRESH_MARGIN_SECONDS
 
 
 class R2Uploader:
@@ -182,6 +196,7 @@ class R2Uploader:
             self._delete_prefix(r2_event_prefix(target.split(":", 1)[1]))
             return
         if target.startswith("event-content:"):
+            # Only queued by clears before 1.0.11; newer clears tombstone each strip.
             event_id = target.split(":", 1)[1]
             self._delete_prefix(f"{r2_event_prefix(event_id)}sessions/")
             self._signed_call(

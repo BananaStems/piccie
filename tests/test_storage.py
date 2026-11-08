@@ -194,7 +194,7 @@ def test_clear_event_photos(storage):
     assert ok is True
     assert basenames == [
         f"named-event-session:{event.id}:{session.id}:{event.r2_folder}:wedding-strip-00001",
-        f"event-content:{event.id}",
+        f"event-archive:{event.id}",
         f"named-event-archive:{event.id}:{event.r2_folder}",
     ]
     assert storage.get_session(session.id) is None
@@ -219,14 +219,14 @@ def test_clear_event_photos_collects_r2_targets(storage):
     ok, basenames = storage.clear_event_photos(event.id)
     assert ok is True
     named_archive = f"named-event-archive:{event.id}:{event.r2_folder}"
-    assert basenames == [target, f"event-content:{event.id}", named_archive]
+    assert basenames == [target, f"event-archive:{event.id}", named_archive]
     assert storage.pending_r2_deletions() == [
         target,
-        f"event-content:{event.id}",
+        f"event-archive:{event.id}",
         named_archive,
     ]
     storage.complete_r2_deletion(target)
-    storage.complete_r2_deletion(f"event-content:{event.id}")
+    storage.complete_r2_deletion(f"event-archive:{event.id}")
     storage.complete_r2_deletion(named_archive)
     assert storage.pending_r2_deletions() == []
 

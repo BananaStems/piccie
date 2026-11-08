@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import io
+import logging
 import os
 import secrets
 import socket
 import tempfile
 import threading
 import zipfile
+from contextlib import contextmanager
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
@@ -51,7 +53,7 @@ from engine.performance import (
 )
 from engine.power import schedule_poweroff
 from engine.provisioning import provision_booth
-from engine.r2 import R2Uploader
+from engine.r2 import R2Uploader, signed_url_expiring
 from engine.storage import data_degraded, disk_free_mb, disk_low
 from engine.ssh_access import read_authorized_key, set_authorized_key
 from engine.template_packages import GOOGLE_FONTS, install_template
@@ -59,7 +61,23 @@ from engine.templates import TemplateRegistry
 from engine.version import APP_VERSION, BUILD_ID
 from engine.wifi import connect_network, current_ssid, list_networks
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api")
+STUDIO_LINK_INACTIVE = "This Studio link is no longer active. Create a new one on the booth."
+# A publish can upload for minutes. Held by publish, disable, clear and delete,
+# so a kiosk retry cannot mint a second link, and a publish that finishes later
+# cannot revive a gallery the organiser just cleared, deleted or disabled.
+_publish_lock = threading.Lock()
+
+
+@contextmanager
+def _gallery_guard():
+    if not _publish_lock.acquire(blocking=False):
+        raise HTTPException(409, "The event gallery is still being prepared. Try again in a minute.")
+    try:
+        yield
+    finally:
+        _publish_lock.release()
 
 
 def _capture_call(operation, *args):
@@ -88,7 +106,7 @@ def _require_studio(request: Request) -> None:
     token = request.headers.get("X-Studio-Token", "")
     pairings = getattr(request.app.state, "template_pairings", {})
     if not token or token not in pairings:
-        raise HTTPException(401, "This Studio link is no longer active. Create a new one on the booth.")
+        raise HTTPException(401, STUDIO_LINK_INACTIVE)
 
 
 def _onboarding_data_dir() -> Path:
@@ -532,29 +550,36 @@ def _event_archive(request: Request, event_id: str) -> Path:
 
 def _publish_event(request: Request, event_id: str, regenerate: bool) -> EventShareResponse:
     _require_admin(request)
-    storage = request.app.state.storage
-    event = storage.get_event(event_id)
-    if not event:
-        raise HTTPException(404, "Event not found")
-    if event.share_url and not regenerate:
-        return EventShareResponse(enabled=True, url=event.share_url)
-    config = _ready_config(request)
-    if not config.r2:
-        raise HTTPException(400, "Cloud storage is not configured.")
-    archive = _event_archive(request, event_id)
-    try:
-        url, token = R2Uploader(config.r2).publish_event(
-            event.id,
-            event.name,
-            event.date,
-            archive,
-            previous_token=event.share_token if regenerate else None,
-            event_folder=event.r2_folder,
-        )
-    except Exception as exc:
-        raise HTTPException(502, "Could not publish the event gallery. Check Wi-Fi and try again.") from exc
-    storage.set_event_share(event.id, url, token)
-    return EventShareResponse(enabled=True, url=url)
+    with _gallery_guard():
+        storage = request.app.state.storage
+        event = storage.get_event(event_id)
+        if not event:
+            raise HTTPException(404, "Event not found")
+        # Signed links last 7 days; rebuild a gallery about to expire instead of
+        # showing a dead link as ready.
+        if event.share_url and not regenerate and not signed_url_expiring(event.share_url):
+            return EventShareResponse(enabled=True, url=event.share_url)
+        config = _ready_config(request)
+        if not config.r2:
+            raise HTTPException(400, "Cloud storage is not configured.")
+        archive = _event_archive(request, event_id)
+        try:
+            url, token = R2Uploader(config.r2).publish_event(
+                event.id,
+                event.name,
+                event.date,
+                archive,
+                previous_token=event.share_token,
+                event_folder=event.r2_folder,
+            )
+        except Exception as exc:
+            logger.exception("Publishing the gallery for event %s failed", event.id)
+            raise HTTPException(502, f"Could not publish the event gallery: {exc}") from exc
+        finally:
+            # Only needed for the upload; kept, it doubles the event's disk use.
+            archive.unlink(missing_ok=True)
+        storage.set_event_share(event.id, url, token)
+        return EventShareResponse(enabled=True, url=url)
 
 
 @router.get("/events/{event_id}/share", response_model=EventShareResponse)
@@ -578,26 +603,29 @@ def regenerate_event_share(request: Request, event_id: str) -> EventShareRespons
 @router.delete("/events/{event_id}/share", response_model=EventShareResponse)
 def disable_event_share(request: Request, event_id: str) -> EventShareResponse:
     _require_admin(request)
-    storage = request.app.state.storage
-    event = storage.get_event(event_id)
-    if not event:
-        raise HTTPException(404, "Event not found")
-    if event.share_token:
-        config = _ready_config(request)
-        if not config.r2:
-            raise HTTPException(400, "Cloud storage is not configured.")
-        try:
-            R2Uploader(config.r2).disable_share(event.id, event.share_token)
-        except Exception as exc:
-            raise HTTPException(502, "Could not disable the gallery. Check Wi-Fi and try again.") from exc
-    storage.set_event_share(event.id, None, None)
+    with _gallery_guard():
+        storage = request.app.state.storage
+        event = storage.get_event(event_id)
+        if not event:
+            raise HTTPException(404, "Event not found")
+        if event.share_token:
+            config = _ready_config(request)
+            if not config.r2:
+                raise HTTPException(400, "Cloud storage is not configured.")
+            try:
+                R2Uploader(config.r2).disable_share(event.id, event.share_token)
+            except Exception as exc:
+                logger.exception("Disabling the gallery for event %s failed", event.id)
+                raise HTTPException(502, f"Could not disable the gallery: {exc}") from exc
+        storage.set_event_share(event.id, None, None)
     return EventShareResponse(enabled=False)
 
 
 @router.post("/events/{event_id}/clear-photos")
 def clear_event_photos(request: Request, event_id: str) -> dict:
     _require_admin(request)
-    ok, targets = request.app.state.storage.clear_event_photos(event_id)
+    with _gallery_guard():
+        ok, targets = request.app.state.storage.clear_event_photos(event_id)
     if not ok:
         raise HTTPException(404, "Event not found")
     if targets:
@@ -608,7 +636,8 @@ def clear_event_photos(request: Request, event_id: str) -> dict:
 @router.delete("/events/{event_id}")
 def delete_event(request: Request, event_id: str) -> dict:
     _require_admin(request)
-    ok, targets = request.app.state.storage.delete_event(event_id)
+    with _gallery_guard():
+        ok, targets = request.app.state.storage.delete_event(event_id)
     if not ok:
         raise HTTPException(404, "Event not found")
     if targets:
@@ -816,9 +845,10 @@ def delete_session(request: Request, session_id: str) -> dict:
     session = storage.get_session(session_id)
     if not session or not (Path(session.local_path) / "strip.jpg").exists():
         raise HTTPException(404, "Photo strip not found")
-    event = storage.get_event(session.event_id)
-    share_disabled = bool(event and event.share_url)
-    ok, targets = storage.delete_session(session_id)
+    with _gallery_guard():
+        event = storage.get_event(session.event_id)
+        share_disabled = bool(event and event.share_url)
+        ok, targets = storage.delete_session(session_id)
     if not ok:
         raise HTTPException(404, "Photo strip not found")
     if targets:

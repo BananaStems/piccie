@@ -14,7 +14,7 @@ from engine.paths import (
     r2_named_session_target,
     r2_named_strip_key,
 )
-from engine.r2 import R2Uploader
+from engine.r2 import R2Uploader, signed_url_expiring
 
 
 class Response:
@@ -424,3 +424,22 @@ def test_guest_download_mismatch_fails_closed(tmp_path, monkeypatch):
         assert "guest page" in str(exc)
     else:
         raise AssertionError("mismatched guest bytes should fail the upload")
+
+
+def test_signed_url_expiring_reads_sigv4_lifetime():
+    from datetime import datetime, timedelta, timezone
+
+    def signed(age: timedelta) -> str:
+        stamp = (datetime.now(timezone.utc) - age).strftime("%Y%m%dT%H%M%SZ")
+        return f"https://r2.example/k?X-Amz-Date={stamp}&X-Amz-Expires=604800&X-Amz-Signature=x"
+
+    assert not signed_url_expiring(signed(timedelta(days=1)))
+    assert signed_url_expiring(signed(timedelta(days=6, hours=1)))
+    assert signed_url_expiring(signed(timedelta(days=8)))
+    assert not signed_url_expiring("https://gallery.example/g/token")
+
+
+def test_real_presigned_url_is_fresh():
+    url = R2Uploader(R2Config("acct", "key", "secret", "photos")).download_url("k")
+    assert "X-Amz-Date=" in url and not signed_url_expiring(url)
+

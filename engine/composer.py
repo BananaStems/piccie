@@ -10,6 +10,7 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont, ImageOps
 
 from engine.atomicio import write_bytes_atomic
+from engine.camera_settings import FILTER_NAMES
 from engine.config import ROOT_DIR
 from engine.templates import Template
 
@@ -31,12 +32,11 @@ STRIP_HEIGHT = 1800  # 2×6″ @ 300 DPI
 # preview and the photo slots in the final strip, leaving template artwork and
 # its exact brand colours untouched.
 _FILTER_STATE = {"name": "clean", "strength": 1.0}
-_FILTER_NAMES = {"clean", "soft", "warm", "mono", "bold"}
 _WARM_LUT = [min(255, max(0, x + 14)) for x in range(256)] + list(range(256)) + [min(255, max(0, x - 14)) for x in range(256)]
 
 
 def configure_filter(*, name: str | None = None, strength: float | None = None) -> None:
-    if name in _FILTER_NAMES:
+    if name in FILTER_NAMES:
         _FILTER_STATE["name"] = name
     if strength is not None:
         _FILTER_STATE["strength"] = max(0.0, min(1.0, float(strength)))
@@ -301,13 +301,6 @@ def _layout_metrics(layout: dict) -> dict:
 def strip_dimensions(template: Template) -> tuple[int, int]:
     metrics = _layout_metrics(template.strip_layout)
     return metrics["strip_w"], metrics["strip_h"]
-
-
-def photo_slot_size(template: Template, index: int = 0) -> tuple[int, int]:
-    """Return print slot dimensions for photo index (0-based)."""
-    metrics = _layout_metrics(template.strip_layout)
-    idx = max(0, min(index, len(metrics["slot_heights"]) - 1))
-    return metrics["slot_w"], metrics["slot_heights"][idx]
 
 
 def render_strip_image(

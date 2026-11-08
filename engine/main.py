@@ -5,10 +5,10 @@ from contextlib import asynccontextmanager
 from ipaddress import ip_address
 
 from fastapi import FastAPI
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
-from engine.api.routes import router
+from engine.api.routes import STUDIO_LINK_INACTIVE, router
 from engine.camera import CameraService
 from engine.capture_delivery import CaptureDelivery
 from engine.config import ROOT_DIR, ConfigStore
@@ -18,6 +18,8 @@ from engine.templates import TemplateRegistry
 from engine.upload_queue import UploadQueue
 
 WEB_DIR = ROOT_DIR / "web"
+# Eight 3 MB template images, base64-encoded, plus the layer JSON.
+MAX_STUDIO_BODY_BYTES = 40 * 1024 * 1024
 
 
 class NoCacheStaticFiles(StaticFiles):
@@ -80,13 +82,16 @@ def healthz() -> str:
     return "ok"
 
 
-def lan_request_allowed(host: str, path: str) -> bool:
+def _local_client(host: str) -> bool:
     try:
-        if ip_address(host).is_loopback:
-            return True
+        return ip_address(host).is_loopback
     except ValueError:
-        if host == "testclient":
-            return True
+        return host == "testclient"
+
+
+def lan_request_allowed(host: str, path: str) -> bool:
+    if _local_client(host):
+        return True
     exact = {
         "/healthz",
         "/studio.html",
@@ -102,8 +107,20 @@ def lan_request_allowed(host: str, path: str) -> bool:
 async def restrict_lan_surface(request, call_next):
     """Only token-protected phone tools are reachable from venue Wi-Fi."""
     host = request.client.host if request.client else ""
-    if not lan_request_allowed(host, request.url.path):
+    path = request.url.path
+    if not lan_request_allowed(host, path):
         return PlainTextResponse("Not found", status_code=404)
+    if path.startswith("/api/studio/") and not _local_client(host):
+        # FastAPI reads the whole body before a route can check the token, so
+        # turn unpaired or oversized phone requests away here, body unread.
+        pairings = getattr(request.app.state, "template_pairings", {})
+        if request.headers.get("X-Studio-Token", "") not in pairings:
+            return JSONResponse({"detail": STUDIO_LINK_INACTIVE}, status_code=401)
+        length = request.headers.get("content-length", "")
+        if request.method not in ("GET", "HEAD") and (
+            not length.isdigit() or int(length) > MAX_STUDIO_BODY_BYTES
+        ):
+            return JSONResponse({"detail": "This template is too large to install."}, status_code=413)
     return await call_next(request)
 
 

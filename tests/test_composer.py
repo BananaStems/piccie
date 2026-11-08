@@ -12,7 +12,6 @@ from engine.composer import (
     apply_filter,
     compose_strip,
     configure_filter,
-    photo_slot_size,
     render_filtered_photo_preview_jpeg,
     render_strip_image,
 )
@@ -93,13 +92,6 @@ def test_strip_preview_has_placeholders():
     template = registry.load("classic")
     img = render_strip_image(template, "Sarah & James", "", "2026-06-14", photos=None)
     assert img.size == (600, 1800)
-
-
-def test_photo_slot_aspect_matches_strip_layout():
-    registry = TemplateRegistry()
-    template = registry.load("classic")
-    for index in range(3):
-        assert photo_slot_size(template, index) == (600, 400)
 
 
 def test_core_strip_layout_geometry():
