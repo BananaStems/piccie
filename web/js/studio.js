@@ -98,8 +98,8 @@ let sheetSwipe = null;
 let statusTimer = null;
 let historyStates = [];
 let historyIndex = 0;
-let savedSnapshot = null;
-let savedOnce = false;
+// The name and design last sent to the booth; null until the first save.
+let savedKey = null;
 let saving = false;
 let draftWarned = false;
 let nameInvalid = false;
@@ -158,6 +158,7 @@ function snapshot() {
   // Images are kept once in state.assets, never copied into every undo step.
   return JSON.stringify({ background: state.background, layers: state.layers });
 }
+function saveKey() { return `${templateName.trim()}\n${snapshot()}`; }
 function usedAssets() {
   const used = new Set(state.layers.filter((layer) => layer.type === "image").map((layer) => layer.asset));
   return state.assets.filter((asset) => used.has(asset.id));
@@ -191,7 +192,7 @@ function restoreHistory(index) {
 function saveDraft() {
   try {
     const design = { background: state.background, layers: state.layers, assets: usedAssets() };
-    localStorage.setItem(DRAFT_KEY, JSON.stringify({ version: 1, name: templateName, saved: savedOnce, design }));
+    localStorage.setItem(DRAFT_KEY, JSON.stringify({ version: 1, name: templateName, saved: savedKey, design }));
   } catch {
     if (!draftWarned) {
       draftWarned = true;
@@ -204,7 +205,7 @@ function restoreDraft() {
     const draft = JSON.parse(localStorage.getItem(DRAFT_KEY));
     if (draft?.version !== 1 || !Array.isArray(draft.design?.layers)) return false;
     templateName = draft.name === "Untitled template" ? "" : (draft.name || "");
-    savedOnce = draft.saved === true;
+    savedKey = typeof draft.saved === "string" ? draft.saved : null;
     state.background = draft.design.background || "#ffffff";
     state.assets = Array.isArray(draft.design.assets) ? draft.design.assets : [];
     state.layers = draft.design.layers;
@@ -346,6 +347,14 @@ function renderCanvas() {
   loadFonts(state.fonts.filter((font) => state.layers.some((layer) => layer.font === font.id)));
   bindDragging();
 }
+// Live slider and colour-picker moves repaint one item, not every layer and its image data.
+function paintLayer(layer) {
+  const element = layerRoot.querySelector(`[data-layer="${CSS.escape(layer.id)}"]`);
+  if (!element) return;
+  Object.assign(element.style, { left: `${layer.x}px`, top: `${layer.y}px`, width: `${layer.w}px`, height: `${layer.h}px` });
+  if (layer.type === "text") Object.assign(element.style, { fontSize: `${layer.font_size}px`, color: layer.fill });
+  if (layer.type === "shape") Object.assign(element.style, { background: layer.fill, borderRadius: `${layer.radius}px` });
+}
 function renderChrome() {
   sheet.classList.toggle("is-open", Boolean(sheetMode));
   document.querySelectorAll("[data-tool]").forEach((button) => {
@@ -358,10 +367,11 @@ function renderChrome() {
   canvasHint.textContent = selected() ? "Drag to move or resize" : "Tap an item to edit";
   undoButton.disabled = historyIndex <= 0;
   redoButton.disabled = historyIndex >= historyStates.length - 1;
-  const unchanged = savedSnapshot !== null && savedSnapshot === snapshot();
+  const unchanged = savedKey === saveKey();
   saveButton.disabled = saving || unchanged;
   saveButton.classList.toggle("is-saved", unchanged);
-  saveButton.innerHTML = saving ? "Saving…" : unchanged ? `${icon("check")}Saved` : savedOnce ? "Save copy" : "Save";
+  // Each save adds a template to the booth, so a second one is a copy.
+  saveButton.innerHTML = saving ? "Saving…" : unchanged ? `${icon("check")}Saved` : savedKey !== null ? "Save copy" : "Save";
 }
 
 /* Direct manipulation on the strip */
@@ -562,13 +572,12 @@ function renderDesignSheet() {
   if (confirm) confirm.onclick = startNewTemplate;
 }
 function renderLayersSheet() {
-  const kinds = { text: "text", image: "image", shape: "shape" };
   const layer = selected();
   const index = state.layers.indexOf(layer);
   sheetContent.innerHTML = `<p class="sheet-note">The top of the list sits in front.</p>
     <div class="option-list">${[...state.layers].reverse().map((item) => `
       <button class="option-row" type="button" data-select="${escapeHtml(item.id)}" aria-pressed="${item.id === selectedId}">
-        <span class="row-main"><span class="layer-icon">${icon(kinds[item.type])}</span><strong>${escapeHtml(layerName(item))}</strong></span>
+        <span class="row-main"><span class="layer-icon">${icon(item.type)}</span><strong>${escapeHtml(layerName(item))}</strong></span>
       </button>`).join("")}</div>
     <div class="action-row">
       <button class="action-button" type="button" id="layer-down"${layer && index > 0 ? "" : " disabled"}>${icon("down")}Send back</button>
@@ -624,7 +633,7 @@ function renderEditSheet() {
       const prop = input.dataset.slider;
       resizeFromSlider(layer, prop, Number(input.value));
       label.textContent = `${Math.round({ font_size: layer.font_size, image_w: layer.w }[prop] ?? layer[prop])} px`;
-      renderCanvas();
+      paintLayer(layer);
     };
     input.onchange = () => { commit(); renderChrome(); };
   });
@@ -642,7 +651,7 @@ function updateLayer(layer, patch, done) {
     commit();
     render();
   } else {
-    renderCanvas();
+    paintLayer(layer);
   }
 }
 // Text and image sliders scale around the item's centre so it stays where it was placed.
@@ -750,8 +759,7 @@ function startNewTemplate() {
   state.layers = defaultLayers();
   templateName = "";
   selectedId = null;
-  savedSnapshot = null;
-  savedOnce = false;
+  savedKey = null;
   nameInvalid = false;
   confirmingReset = false;
   try { localStorage.removeItem(DRAFT_KEY); } catch { /* Storage unavailable. */ }
@@ -777,7 +785,8 @@ async function prepareImage(file) {
   const url = URL.createObjectURL(file);
   try {
     const image = await loadImage(url);
-    const type = file.type === "image/png" ? "image/png" : "image/jpeg";
+    // Only JPEG sources become JPEG; PNG keeps see-through backgrounds (WebP, GIF, SVG logos).
+    const type = file.type === "image/jpeg" ? "image/jpeg" : "image/png";
     for (const side of IMAGE_SIDES) {
       const ratio = Math.min(1, side / Math.max(image.naturalWidth, image.naturalHeight));
       const canvas = document.createElement("canvas");
@@ -847,6 +856,8 @@ saveButton.onclick = async () => {
     showStatus("Add at least one item before saving.", "error");
     return;
   }
+  // Taken before sending: edits made while the upload runs are not on the booth.
+  const sent = saveKey();
   saving = true;
   renderChrome();
   try {
@@ -861,10 +872,7 @@ saveButton.onclick = async () => {
     }
     const result = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(result.detail || "The booth couldn't save this template. Try again.");
-    savedSnapshot = snapshot();
-    savedOnce = true;
-    // Keep the design as a draft so a reload can carry on from it; "saved" makes
-    // the next save say "Save copy", because each save adds a template to the booth.
+    savedKey = sent;
     saveDraft();
     showStatus(`“${result.name}” is on the booth. Pick it when you set up an event.`, "success");
   } catch (error) {
@@ -938,8 +946,7 @@ async function start() {
     resetHistory();
     render();
     fitStrip(true);
-    if (recovered && savedOnce) {
-      savedSnapshot = snapshot();
+    if (recovered && savedKey === saveKey()) {
       showStatus(`“${templateName}” is already on the booth. Change it to save a copy, or start a new template from Template.`);
     } else if (recovered) {
       showStatus("Your draft is back where you left it.", "success");

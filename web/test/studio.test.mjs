@@ -39,3 +39,21 @@ test("expired links and lost Wi-Fi get a clear blocking message", () => {
 test("icons are drawn SVG, not text glyphs", () => {
   assert.doesNotMatch(html, /[↶↷＋○◐▱×]/);
 });
+
+test("Saved reflects the name and design the booth actually received", () => {
+  // Captured before the upload, so edits made while it runs stay unsaved.
+  assert.match(js, /const sent = saveKey\(\);[\s\S]*?await fetch\("\/api\/studio\/templates"/);
+  assert.match(js, /savedKey = sent;/);
+  assert.match(js, /function saveKey\(\) \{ return `\$\{templateName\.trim\(\)\}/);
+  // Kept with the draft, so a reload compares against what was really saved.
+  assert.match(js, /saved: savedKey/);
+});
+
+test("only JPEG sources lose transparency", () => {
+  assert.match(js, /file\.type === "image\/jpeg" \? "image\/jpeg" : "image\/png"/);
+});
+
+test("live slider moves repaint one item instead of the whole canvas", () => {
+  assert.match(js, /input\.oninput = \(\) => \{[\s\S]*?paintLayer\(layer\);\s*\};/);
+  assert.doesNotMatch(js.slice(js.indexOf("input.oninput"), js.indexOf("input.onchange")), /renderCanvas\(\)/);
+});
