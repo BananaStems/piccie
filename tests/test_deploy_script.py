@@ -52,6 +52,8 @@ def test_deploy_fails_safely_without_ssh_key(tmp_path):
     assert result.returncode == 2
     assert "pi@192.168.1.145" in result.stderr
     assert "disables password login" in result.stderr
+    assert "Host 192.168.1.145" in result.stderr
+    assert "IdentityFile" in result.stderr
 
 
 def test_deploy_pushes_release_and_reloads_kiosk(tmp_path):

@@ -27,10 +27,18 @@ if ! ssh "${SSH_ARGS[@]}" "${HOST}" \
   cat >&2 <<EOF
 Could not open key-based SSH access to ${HOST}.
 
-A fresh Piccie image disables password login and installs your SSH key only
-when onboarding finishes. If no key was previously installed, this booth
-cannot receive an SSH update yet; finish setup locally once or reflash an image
-that includes the phone-pairing fix.
+Piccie disables password login, so SSH must use the key whose public half is
+on the booth. Check two things:
+
+1. The booth has your public key. On the booth, open Settings > Operator access
+   > Open on phone or computer, and paste your .pub key under Remote access.
+2. SSH offers the matching private key. If it is not your default key, add this
+   to ~/.ssh/config (with your key's path):
+
+   Host ${HOST#*@}
+     User pi
+     IdentityFile ~/.ssh/piccie_ed25519
+     IdentitiesOnly yes
 EOF
   exit 2
 fi
