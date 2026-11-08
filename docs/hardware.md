@@ -39,17 +39,17 @@ in any current slicer) and an STL file:
 
 | Part | Files | Size (mm) | Material |
 | --- | --- | --- | --- |
-| Main body | [3MF](../hardware/body.3mf) · [STL](../hardware/body.stl) | 245 × 245 × 62 | Opaque PETG |
-| LED diffuser | [3MF](../hardware/diffuser.3mf) · [STL](../hardware/diffuser.stl) | 242 × 242 × 8 | Clear or white PETG |
-| Raspberry Pi mounting plate | [3MF](../hardware/pisupport.3mf) · [STL](../hardware/pisupport.stl) | 240 × 70 × 9 | PETG |
-| Back cover | [3MF](../hardware/lid.3mf) · [STL](../hardware/lid.stl) | 240 × 227 × 2 | PETG |
-| Stand | [3MF](../hardware/stand.3mf) · [STL](../hardware/stand.stl) | 100 × 38 × 62 | PETG |
+| Main body | [3MF](../hardware/piccie-main-body.3mf) · [STL](../hardware/piccie-main-body.stl) | 245 × 245 × 62 | Opaque PETG |
+| LED diffuser | [3MF](../hardware/piccie-led-diffuser.3mf) · [STL](../hardware/piccie-led-diffuser.stl) | 242 × 242 × 8 | Clear or white PETG |
+| Raspberry Pi mounting plate | [3MF](../hardware/piccie-pi-mounting-plate.3mf) · [STL](../hardware/piccie-pi-mounting-plate.stl) | 240 × 70 × 9 | PETG |
+| Back cover | [3MF](../hardware/piccie-back-cover.3mf) · [STL](../hardware/piccie-back-cover.stl) | 240 × 227 × 2 | PETG |
+| Stand | [3MF](../hardware/piccie-stand.3mf) · [STL](../hardware/piccie-stand.stl) | 100 × 38 × 62 | PETG |
 
 The main body needs a build plate of at least 245 × 245 mm, such as a Bambu Lab
 X1C, P1S or A1. PETG reduces the chance of heat-related warping during long
 events.
 
-To change the design, open [piccie.step](../hardware/piccie.step) in any CAD
+To change the design, open [piccie-assembly.step](../hardware/piccie-assembly.step) in any CAD
 program. It holds all five parts as solid bodies.
 
 The printable files are licensed under [CC BY 4.0](../hardware/LICENSE.md): print,
