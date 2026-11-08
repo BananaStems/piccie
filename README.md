@@ -44,7 +44,8 @@
 
 - A big "Tap to start" screen, a countdown ring, three photos and a finished
   strip in seconds.
-- A QR code that downloads their strip straight to their phone.
+- A QR code that downloads their strip straight to their phone, where it
+  slides out of a little printer.
 - Nothing to install and no network to join.
 
 **For you**
@@ -105,9 +106,11 @@ the repository to hear when they land.
 
 ## Contributing and licence
 
-Built one? Found a bug? Open an
-[issue](https://github.com/BananaStems/piccie/issues). To work on the code, read
-[CONTRIBUTING.md](CONTRIBUTING.md).
+Built one? Show it off in
+[Show and tell](https://github.com/BananaStems/piccie/discussions/categories/show-and-tell).
+Stuck or found a bug? Open an
+[issue](https://github.com/BananaStems/piccie/issues/new/choose). To work on the
+code, read [CONTRIBUTING.md](CONTRIBUTING.md).
 
 Piccie is released under the [MIT licence](LICENSE). Font licences are listed in
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
