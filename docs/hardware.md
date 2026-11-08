@@ -52,6 +52,9 @@ events.
 To change the design, open [piccie.step](../hardware/piccie.step) in any CAD
 program. It holds all five parts as solid bodies.
 
+The printable files are licensed under [CC BY 4.0](../hardware/LICENSE.md): print,
+remix or sell them, as long as you credit Piccie.
+
 ## Lighting note
 
 The build reuses the light source and electronics from the 10-inch ring light,
@@ -62,7 +65,6 @@ open or adapt mains-voltage equipment.
 
 ## What remains before release
 
-- Hardware-design licence
 - Slicer settings and print orientation
 - Heat-set insert and fastener map
 - Exact cable specifications

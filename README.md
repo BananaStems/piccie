@@ -112,5 +112,7 @@ Stuck or found a bug? Open an
 [issue](https://github.com/BananaStems/piccie/issues/new/choose). To work on the
 code, read [CONTRIBUTING.md](CONTRIBUTING.md).
 
-Piccie is released under the [MIT licence](LICENSE). Font licences are listed in
+Piccie's software is released under the [MIT licence](LICENSE). The 3D-printable
+files in [hardware/](hardware/) are under [CC BY 4.0](hardware/LICENSE.md). Font
+licences are listed in
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
