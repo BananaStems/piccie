@@ -4,77 +4,110 @@
 
 <p align="center"><strong>Make the booth &amp; the memories</strong></p>
 
-[![CI](https://github.com/BananaStems/piccie/actions/workflows/ci.yml/badge.svg)](https://github.com/BananaStems/piccie/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/BananaStems/piccie?display_name=tag&sort=semver)](https://github.com/BananaStems/piccie/releases/latest)
-[![MIT License](https://img.shields.io/badge/license-MIT-29231e.svg)](LICENSE)
-[![Raspberry Pi](https://img.shields.io/badge/Raspberry%20Pi-4%20Model%20B-c45c4a.svg)](docs/hardware.md)
+<p align="center">
+  The open-source photo booth you build yourself.<br>
+  Guests take three photos, scan a code, and the strip is on their own phone.
+</p>
+
+<p align="center">
+  <a href="https://github.com/BananaStems/piccie/actions/workflows/ci.yml"><img src="https://github.com/BananaStems/piccie/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/BananaStems/piccie/releases/latest"><img src="https://img.shields.io/github/v/release/BananaStems/piccie?display_name=tag&sort=semver" alt="Release"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-29231e.svg" alt="MIT License"></a>
+  <a href="docs/hardware.md"><img src="https://img.shields.io/badge/Raspberry%20Pi-4%20Model%20B-c45c4a.svg" alt="Raspberry Pi 4 Model B"></a>
+</p>
 
 ![Piccie — Make the booth & the memories](docs/images/piccie-hero.jpg)
 
-Piccie combines a Raspberry Pi, touchscreen, camera and printed enclosure into
-a self-contained photobooth. Guests take three photos and scan a QR code to
-download their strip. Organisers create events, manage galleries and design
-templates from a phone connected to the same Wi-Fi.
+## Why Piccie
 
-Piccie is self-hosted. The booth stores its own data and uploads finished strips
-directly to a private bucket in your Cloudflare R2 account. It creates
-seven-day signed guest links without a Worker, OAuth client, GitHub connection
-or public bucket. Optionally, connect your own domain to a second bucket for
-short links and smaller QR codes that don't expire.
+- **Easy to set up.** Flash one file to a microSD card. The only thing you type
+  on the booth is the Wi-Fi password. You finish setup on your phone in about
+  five minutes.
+- **Guests love it.** Tap, smile three times, scan. The strip downloads over
+  mobile data. No app, no sign-up, and nobody has to join the booth's Wi-Fi.
+- **You own it.** Photos go to your own Cloudflare storage, which is free for
+  most parties. Design your own strips. MIT licence, no subscription.
 
-Guest QR codes point straight to R2 over HTTPS. A guest can use mobile data or
-any Wi-Fi; their phone never needs to join the booth's network.
-
-R2 media is organised by event name and date. For example, an event named
-“Sarah & James” on 14 June 2026 uses `sarah-james-2026-06-14/`, with finished
-strips under `strips/` and the three original captures under `photos/`. Strip
-numbers are permanent five-digit identifiers such as
-`sarah-james-strip-00001.jpg`. From the event gallery, **Share event** displays
-a QR code whose **Download all photos** action transfers one ZIP containing
-both folders.
-
-## First-time setup
-
-1. Flash the Piccie image with Raspberry Pi Imager and skip its operating-system
-   customisation options.
-2. Boot Piccie and choose the Wi-Fi network on its touchscreen. That's the only
-   thing you type on the booth.
-3. Scan the QR code the booth shows, or open its address on a computer on the
-   same Wi-Fi. Paste your Cloudflare R2 details, optionally add a custom domain
-   and an SSH public key, choose the operator PIN, and select **Finish setup**.
-
-Cloud storage, the custom domain and the SSH key can be changed later from
-**Settings → Operator access → Open on phone or computer**.
-
-## Get started
-
-Choose the guide you need:
-
-1. **[Set up the software](docs/software-setup.md)** — download the ready-made
-   image, or build it yourself on macOS, Linux or Windows. Then flash the
-   microSD card, prepare Cloudflare R2, complete setup and run the reliability
-   test.
-2. **[Build the hardware](docs/hardware.md)** — see the current parts list and
-   printed components. STL files and full assembly instructions are coming
-   soon.
-
-## Piccie in action
-
-| Booth admin | Phone template studio |
-| --- | --- |
-| ![Piccie event admin screen](docs/images/admin.png) | ![Piccie Template Studio on a phone](docs/images/template-studio.png) |
+## See it in action
 
 | Start a session | Take photos | Download the strip |
 | --- | --- | --- |
 | ![Piccie guest start screen](docs/images/tap-to-start.png) | ![Piccie photo capture screen](docs/images/photo-capture.png) | ![Piccie finished strip and download QR code](docs/images/download-strip.png) |
 
+| Your events on the booth | Design strips on your phone |
+| --- | --- |
+| ![Piccie event admin screen](docs/images/admin.png) | ![Piccie Template Studio on a phone](docs/images/template-studio.png) |
+
+## What you get
+
+**For guests**
+
+- A big "Tap to start" screen, a countdown ring, three photos and a finished
+  strip in seconds.
+- A QR code that downloads their strip straight to their phone.
+- Nothing to install and no network to join.
+
+**For you**
+
+- **Events.** Give each party a name, a date and an end time. The heading and
+  date print on every strip.
+- **Template Studio.** Design strips on your phone: text, images, shapes and
+  three photo slots. Classic and Love templates are included.
+- **Photo looks.** Clean, Soft, Warm, Mono or Bold, with a strength slider and
+  a live preview.
+- **Share the whole event.** One QR code downloads every strip and original
+  photo as a single ZIP.
+- **Guest mode stays locked.** Leaving it needs five taps in the corner and
+  your four-digit PIN.
+
+**Under the hood**
+
+- Runs on a Raspberry Pi 4, an IMX708 camera and a 7-inch touchscreen.
+- Keeps working when Wi-Fi drops. Photos wait on the booth and upload when the
+  connection returns.
+- The system files are read-only and photos are saved safely, so a pulled
+  plug won't break the booth.
+- Optional short links on your own domain give smaller QR codes that never
+  expire.
+- Updates install over Wi-Fi and roll back by themselves if anything fails.
+- An eight-hour soak test proves the booth before a real event.
+
+## Build your own in five steps
+
+1. **Get the parts.** See the [hardware list](docs/hardware.md).
+2. **Flash the image** to a microSD card with Raspberry Pi Imager.
+   [Getting started](docs/getting-started.md)
+3. **Make a Cloudflare storage bucket** for the photos. It takes about five
+   minutes. [Cloudflare storage](docs/cloudflare.md)
+4. **Turn the booth on**, pick your Wi-Fi, then finish setup on your phone.
+   [Getting started](docs/getting-started.md#3-turn-it-on-and-pick-wi-fi)
+5. **Create an event and press Launch.**
+   [Running an event](docs/running-an-event.md)
+
+## Guides
+
+| Guide | What it covers |
+| --- | --- |
+| [Getting started](docs/getting-started.md) | Flash the card, join Wi-Fi, finish setup on your phone, take a test strip |
+| [Cloudflare storage](docs/cloudflare.md) | Create the photo bucket and key, and optionally use your own domain for short links |
+| [Running an event](docs/running-an-event.md) | Create events, launch guest mode, share the photos, shut down safely |
+| [Templates](docs/templates.md) | Design your own strips with Template Studio |
+| [Troubleshooting](docs/troubleshooting.md) | What each warning means and how to fix it |
+| [Advanced](docs/advanced.md) | Build the image yourself, update over SSH, run the soak test, develop locally |
+| [Hardware](docs/hardware.md) | Parts list and printed parts |
+
 ## Project status
 
-The software is usable and tested on the Raspberry Pi 4 Model B reference
-booth. The hardware release is not complete: STL files, final fastener
-quantities and photographed assembly instructions still need to be published.
+The software is ready to use and is tested on the Raspberry Pi 4 Model B
+reference booth. The hardware release is still in progress: the STL files,
+fastener list and photographed assembly guide are coming soon. Star or watch
+the repository to hear when they land.
 
-For development and contribution instructions, read
-[CONTRIBUTING.md](CONTRIBUTING.md). Piccie is released under the MIT licence;
-third-party font licensing is recorded in
+## Contributing and licence
+
+Built one? Found a bug? Open an
+[issue](https://github.com/BananaStems/piccie/issues). To work on the code, read
+[CONTRIBUTING.md](CONTRIBUTING.md).
+
+Piccie is released under the [MIT licence](LICENSE). Font licences are listed in
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
