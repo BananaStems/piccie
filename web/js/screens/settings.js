@@ -424,13 +424,14 @@ export async function renderSettingsScreen({ app, state, render, api, escapeHtml
         button.setAttribute("aria-pressed", String(active));
         button.disabled = button.dataset.performanceMode === "performance" && !available;
       });
-      warning.hidden = mode !== "performance";
       detail.textContent = option?.dataset.detail || "";
 
       const selected = deviceSelect.value;
       const detected = performanceElement.dataset.detectedDevice;
       const unchanged = selected === performanceElement.dataset.currentDevice
         && mode === performanceElement.dataset.currentMode;
+      // The warning guards turning performance on; once it's on there is nothing to agree to.
+      warning.hidden = mode !== "performance" || unchanged;
       let message = "A restart is required to change this setting.";
       let blocked = performanceElement.dataset.canApply !== "true";
       if (!detected) message = "Open this page on Piccie to apply hardware settings.";

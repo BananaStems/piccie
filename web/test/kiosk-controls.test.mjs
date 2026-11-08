@@ -187,3 +187,7 @@ test("event download shows upload progress while it is prepared", () => {
   assert.match(adminSource, /withShareProgress\(\(\) => api\.regenerateEventShare/);
   assert.match(apiSource, /getEventShareProgress: \(id\) => request\(`\/events\/\$\{id\}\/share\/progress`\)/);
 });
+
+test("overclock warning shows only when switching performance mode on", () => {
+  assert.match(settingsSource, /warning\.hidden = mode !== "performance" \|\| unchanged;/);
+});
