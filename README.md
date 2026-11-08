@@ -100,9 +100,9 @@
 ## Project status
 
 The software is ready to use and is tested on the Raspberry Pi 4 Model B
-reference booth. The hardware release is still in progress: the STL files,
-fastener list and photographed assembly guide are coming soon. Star or watch
-the repository to hear when they land.
+reference booth. The [files to print](docs/hardware.md#parts-to-print) are
+ready. The fastener list, print settings and photographed assembly guide are
+coming soon. Star or watch the repository to hear when they land.
 
 ## Contributing and licence
 

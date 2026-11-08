@@ -1,8 +1,7 @@
 # Hardware
 
-> **Coming soon:** The reference booth is working, but the STL files, final
-> print settings, fastener quantities and photographed assembly guide are not
-> ready for release yet.
+> **Work in progress:** The files to print are ready. Final print settings,
+> fastener quantities and a photographed assembly guide are still to come.
 
 This page lists the parts used by the Piccie reference build so prospective
 builders can understand the scope and begin checking availability. Marketplace
@@ -35,18 +34,23 @@ USB touch cable, internal power leads, LED wiring and cable lengths.
 
 ## Parts to print
 
-Piccie uses four printed components:
+Piccie has five printed parts. Each comes as a 3MF file (millimetre units, opens
+in any current slicer) and an STL file:
 
-1. Main body
-2. LED diffuser
-3. Raspberry Pi mounting plate
-4. Back cover
+| Part | Files | Size (mm) | Material |
+| --- | --- | --- | --- |
+| Main body | [3MF](../hardware/body.3mf) · [STL](../hardware/body.stl) | 245 × 245 × 62 | Opaque PETG |
+| LED diffuser | [3MF](../hardware/diffuser.3mf) · [STL](../hardware/diffuser.stl) | 242 × 242 × 8 | Clear or white PETG |
+| Raspberry Pi mounting plate | [3MF](../hardware/pisupport.3mf) · [STL](../hardware/pisupport.stl) | 240 × 70 × 9 | PETG |
+| Back cover | [3MF](../hardware/lid.3mf) · [STL](../hardware/lid.stl) | 240 × 227 × 2 | PETG |
+| Stand | [3MF](../hardware/stand.3mf) · [STL](../hardware/stand.stl) | 100 × 38 × 62 | PETG |
 
-The reference parts were printed in PETG to reduce the chance of heat-related
-warping during long events. The diffuser was tested in clear and white PETG.
-The main body is intended to fit on common printers with a build area similar
-to a Bambu Lab X1C, but final model dimensions will be published with the STL
-files.
+The main body needs a build plate of at least 245 × 245 mm, such as a Bambu Lab
+X1C, P1S or A1. PETG reduces the chance of heat-related warping during long
+events.
+
+To change the design, open [piccie.step](../hardware/piccie.step) in any CAD
+program. It holds all five parts as solid bodies.
 
 ## Lighting note
 
@@ -58,7 +62,6 @@ open or adapt mains-voltage equipment.
 
 ## What remains before release
 
-- STL and source CAD files
 - Hardware-design licence
 - Slicer settings and print orientation
 - Heat-set insert and fastener map
