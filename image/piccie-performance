@@ -42,12 +42,18 @@ awk -v begin="${BEGIN}" -v end="${END}" '
 ' "${CONFIG}" >"${TMP}"
 
 if [[ "${MODE}" == "performance" ]]; then
-  cat >>"${TMP}" <<'EOF'
+  # The firmware ignores arm_boost before Pi 4 Rev 1.4, so older boards get the
+  # explicit 1.8 GHz profile validated on Piccie hardware (needs active cooling).
+  PROFILE="arm_boost=1"
+  if [[ "${MODEL}" =~ Rev\ 1\.[0-3]$ ]]; then
+    PROFILE=$'arm_freq=1800\nover_voltage=3\ngpu_freq=600'
+  fi
+  cat >>"${TMP}" <<EOF
 
 # BEGIN PICCIE PERFORMANCE
-# Firmware-supported boost for compatible Raspberry Pi 4 revisions.
+# 1.8 GHz profile for Raspberry Pi 4.
 [pi4]
-arm_boost=1
+${PROFILE}
 [all]
 # END PICCIE PERFORMANCE
 EOF

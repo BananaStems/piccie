@@ -68,6 +68,17 @@ test_performance_profile_schedules_verified_named_reboot() {
   [[ -f "${CONFIG}.piccie-original" ]] || fail "expected original config backup"
 }
 
+test_pre_rev14_pi4_gets_explicit_profile() {
+  setup_fixture
+  printf 'Raspberry Pi 4 Model B Rev 1.1\0' >"${MODEL}"
+  run_helper pi4 performance
+
+  assert_contains "${CONFIG}" "arm_freq=1800"
+  assert_contains "${CONFIG}" "over_voltage=3"
+  assert_contains "${CONFIG}" "gpu_freq=600"
+  assert_not_contains "${CONFIG}" "arm_boost=1"
+}
+
 test_profile_is_idempotent_and_standard_removes_it() {
   setup_fixture
   run_helper pi4 performance
@@ -122,6 +133,7 @@ run_test() {
 }
 
 run_test test_performance_profile_schedules_verified_named_reboot
+run_test test_pre_rev14_pi4_gets_explicit_profile
 run_test test_profile_is_idempotent_and_standard_removes_it
 run_test test_wrong_hardware_fails_without_changes_or_reboot
 run_test test_missing_reboot_timer_fails_safely

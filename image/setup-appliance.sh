@@ -80,6 +80,10 @@ install -d /etc/systemd/system.conf.d /etc/systemd/journald.conf.d /etc/NetworkM
 install -m 644 "${INSTALL_DIR}/image/files/watchdog.conf" /etc/systemd/system.conf.d/10-watchdog.conf
 install -m 644 "${INSTALL_DIR}/image/files/journald-piccie.conf" /etc/systemd/journald.conf.d/10-volatile.conf
 install -m 644 "${INSTALL_DIR}/image/files/nm-keyfile-path.conf" /etc/NetworkManager/conf.d/00-piccie-keyfile-path.conf
+install -m 644 "${INSTALL_DIR}/image/files/nm-wifi-powersave.conf" /etc/NetworkManager/conf.d/20-piccie-wifi-powersave.conf
+install -d /etc/udev/rules.d /etc/rpi/swap.conf.d
+install -m 644 "${INSTALL_DIR}/image/files/60-ondemand-governor.rules" /etc/udev/rules.d/60-ondemand-governor.rules
+install -m 644 "${INSTALL_DIR}/image/files/rpi-swap-piccie.conf" /etc/rpi/swap.conf.d/10-piccie.conf
 # NetworkManager receives DNS from DHCP after root has become read-only. Point
 # libc at NetworkManager's writable runtime file instead of leaving a regular
 # /etc/resolv.conf that NetworkManager cannot replace.
@@ -119,6 +123,14 @@ systemctl mask cloud-init.service cloud-init-local.service cloud-init-main.servi
 # distro-owned remount/root-growth paths: Piccie deliberately keeps p2 fixed and
 # owns growth of the final p3 data partition.
 systemctl mask systemd-remount-fs.service systemd-growfs-root.service rpi-resize.service
+# The booth never updates packages in place and root is read-only, so these
+# periodic jobs either fail daily (logrotate, dpkg-db-backup) or wake mid-event
+# to do work they cannot save. e2scrub only checks LVM volumes; there are none.
+systemctl mask apt-daily.timer apt-daily-upgrade.timer man-db.timer \
+  logrotate.timer dpkg-db-backup.timer e2scrub_all.timer e2scrub_reap.service
+# Bluetooth is off in config.txt (disable-bt, shares the Wi-Fi radio) and
+# nothing uses udisks2 automounting.
+systemctl mask bluetooth.service udisks2.service
 
 systemctl daemon-reload
 systemctl enable piccie-grow-data piccie-firstboot-datapart \

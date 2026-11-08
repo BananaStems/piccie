@@ -5,10 +5,10 @@ Description=Piccie boot diagnostics dump to the boot partition
 After=lightdm.service NetworkManager.service piccie-engine.service
 
 [Service]
-Type=oneshot
-# Let lightdm/NM/the engine settle before snapshotting.
-ExecStartPre=/bin/sleep 25
-ExecStart=/usr/local/bin/piccie-bootdiag
+# simple, with the settle delay inside ExecStart: a oneshot (or ExecStartPre
+# sleep) held multi-user.target for ~28s on every boot.
+Type=simple
+ExecStart=/bin/sh -c 'sleep 25; exec /usr/local/bin/piccie-bootdiag'
 
 [Install]
 WantedBy=multi-user.target
