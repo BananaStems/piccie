@@ -7,12 +7,13 @@ from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 
 from engine.atomicio import write_json_atomic
+from engine.config import DATA_DIR
 
 logger = logging.getLogger(__name__)
 
 
 def _settings_path() -> Path:
-    data_dir = Path(os.environ.get("PICCIE_DATA_DIR", "data"))
+    data_dir = Path(os.environ.get("PICCIE_DATA_DIR", DATA_DIR))
     return data_dir / "camera-settings.json"
 
 

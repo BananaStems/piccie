@@ -52,3 +52,10 @@ dtoverlay=dwc2,dr_mode=host
 # Hardware watchdog (bcm2835_wdt) so a hung boot/GUI auto-reboots instead of
 # sitting dead. Paired with systemd RuntimeWatchdogSec (see watchdog.conf).
 dtparam=watchdog=on
+
+# Bluetooth is unused. It shares the radio and antenna with Wi-Fi, so turning it
+# off steadies Wi-Fi uploads.
+dtoverlay=disable-bt
+# disable-bt makes the PL011 the primary UART, which the firmware then enables by
+# default (kernel log + login on GPIO 14/15). Keep serial off, as before.
+enable_uart=0

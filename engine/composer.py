@@ -10,6 +10,7 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont, ImageOps
 
 from engine.atomicio import write_bytes_atomic
+from engine.camera_settings import FILTER_NAMES
 from engine.config import ROOT_DIR
 from engine.templates import Template
 
@@ -27,15 +28,15 @@ STRIP_WIDTH = 600
 STRIP_HEIGHT = 1800  # 2×6″ @ 300 DPI
 
 # --- Finished-photo looks ----------------------------------------------------
-# Filters are deliberately few and obvious. They run on the preview and final
-# strip, so choosing one is WYSIWYG without camera-style tuning.
+# Filters are deliberately few and obvious. They run on the captured-photo
+# preview and the photo slots in the final strip, leaving template artwork and
+# its exact brand colours untouched.
 _FILTER_STATE = {"name": "clean", "strength": 1.0}
-_FILTER_NAMES = {"clean", "soft", "warm", "mono", "bold"}
 _WARM_LUT = [min(255, max(0, x + 14)) for x in range(256)] + list(range(256)) + [min(255, max(0, x - 14)) for x in range(256)]
 
 
 def configure_filter(*, name: str | None = None, strength: float | None = None) -> None:
-    if name in _FILTER_NAMES:
+    if name in FILTER_NAMES:
         _FILTER_STATE["name"] = name
     if strength is not None:
         _FILTER_STATE["strength"] = max(0.0, min(1.0, float(strength)))
@@ -300,13 +301,6 @@ def _layout_metrics(layout: dict) -> dict:
 def strip_dimensions(template: Template) -> tuple[int, int]:
     metrics = _layout_metrics(template.strip_layout)
     return metrics["strip_w"], metrics["strip_h"]
-
-
-def photo_slot_size(template: Template, index: int = 0) -> tuple[int, int]:
-    """Return print slot dimensions for photo index (0-based)."""
-    metrics = _layout_metrics(template.strip_layout)
-    idx = max(0, min(index, len(metrics["slot_heights"]) - 1))
-    return metrics["slot_w"], metrics["slot_heights"][idx]
 
 
 def render_strip_image(
@@ -707,6 +701,60 @@ def render_strip_preview_jpeg(
     return buf.getvalue()
 
 
+def render_filtered_photo_preview_jpeg(
+    path: Path,
+    *,
+    max_width: int = 640,
+    quality: int = 85,
+) -> bytes:
+    """Render a small filtered capture preview without changing the saved still.
+
+    The full-resolution original remains neutral so the strip composer applies
+    the selected look exactly once. This rendition is only for the thumbnail
+    shown beside the live view immediately after each shutter.
+    """
+    with Image.open(path) as source:
+        preview = source.convert("RGB")
+    try:
+        if preview.width > max_width:
+            target_height = max(1, round(preview.height * max_width / preview.width))
+            resized = preview.resize((max_width, target_height), _RESAMPLE)
+            preview.close()
+            preview = resized
+        filtered = apply_filter(preview)
+        try:
+            buf = io.BytesIO()
+            filtered.save(buf, format="JPEG", quality=quality, subsampling="4:2:0")
+            return buf.getvalue()
+        finally:
+            if filtered is not preview:
+                filtered.close()
+    finally:
+        preview.close()
+
+
+GALLERY_THUMB_SIZE = 240
+
+
+def photo_thumbnail(path: Path) -> Path:
+    """Return a small cached copy of a capture for the gallery list.
+
+    A big event lists hundreds of captures; decoding each full photo to draw a
+    ~90 px tile made the Pi's gallery crawl.
+    """
+    thumb = path.with_name(f"thumb-{path.name}")
+    if not thumb.exists():
+        with Image.open(path) as source:
+            # JPEG draft mode downsamples while decoding, far cheaper than resizing after.
+            source.draft("RGB", (GALLERY_THUMB_SIZE, GALLERY_THUMB_SIZE))
+            small = source.convert("RGB")
+        small.thumbnail((GALLERY_THUMB_SIZE, GALLERY_THUMB_SIZE), _RESAMPLE)
+        buf = io.BytesIO()
+        small.save(buf, format="JPEG", quality=80)
+        write_bytes_atomic(thumb, buf.getvalue())
+    return thumb
+
+
 def compose_strip(
     template: Template,
     photos: list[Path],
@@ -717,12 +765,20 @@ def compose_strip(
     date_separator: str = "/",
 ) -> Path:
     images: list[Image.Image] = []
+    filtered_images: list[Image.Image] = []
     try:
         for path in photos:
             img = Image.open(path)
             images.append(img)
-        canvas = render_strip_image(template, line1, line2, event_date, photos=images, date_separator=date_separator)
-        canvas = apply_filter(canvas)
+            filtered_images.append(apply_filter(img))
+        canvas = render_strip_image(
+            template,
+            line1,
+            line2,
+            event_date,
+            photos=filtered_images,
+            date_separator=date_separator,
+        )
         # q85 + 4:2:0 chroma subsampling: ~25-40% faster encode of the 3.24 MP
         # strip on the Pi (the heaviest single CPU burst per capture), visually
         # identical on a printed 2x6 strip.
@@ -733,6 +789,9 @@ def compose_strip(
         # boot upload-resume would push to R2 as a permanently-broken image.
         write_bytes_atomic(output_path, buf.getvalue())
     finally:
+        for filtered, original in zip(filtered_images, images):
+            if filtered is not original:
+                filtered.close()
         for img in images:
             img.close()
     return output_path

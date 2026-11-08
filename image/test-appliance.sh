@@ -17,7 +17,7 @@ Usage: ./image/test-appliance.sh [--skip-build] [--incremental]
   --skip-build    Only run QEMU boot check on an existing image
   --incremental   Fast rebuild before boot (requires prior full build)
 
-Runs the QEMU p3/ext4 growth and systemd boot check, not a full SSH/API test.
+Runs the QEMU p3/ext4 growth, systemd boot and engine health-endpoint check.
 Requires: Docker Desktop (running) and qemu-system-aarch64.
 EOF
       exit 0

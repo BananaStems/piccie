@@ -711,9 +711,9 @@ input[type="date"]::-webkit-calendar-picker-indicator {
   flex: 0 0 34%;
   min-width: 0;
   overflow-y: auto;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  align-content: start;
+  /* Flex, not grid: grid rows ignore the skipped rows' placeholder height and overlap. */
+  display: flex;
+  flex-direction: column;
   gap: var(--space-3);
   padding: var(--space-1) var(--space-2) var(--space-3) var(--space-1);
   touch-action: pan-y;
@@ -721,6 +721,10 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 
 .gallery-thumb {
   aspect-ratio: 9 / 2;
+  /* Skip layout and paint for the hundreds of rows a big event has off screen. */
+  content-visibility: auto;
+  contain-intrinsic-height: auto 66px;
+  flex-shrink: 0;
   padding: 0;
   overflow: hidden;
   border: 2px solid transparent;
@@ -728,6 +732,28 @@ input[type="date"]::-webkit-calendar-picker-indicator {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: var(--space-1);
+}
+
+.gallery-delete {
+  flex: 0 0 auto;
+  align-self: stretch;
+  min-height: 44px;
+  padding: 0 var(--space-3);
+  border: 1px solid rgba(255, 92, 122, 0.45);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 92, 122, 0.08);
+  color: var(--danger);
+  font: inherit;
+  font-size: var(--font-sm);
+  font-weight: 700;
+}
+
+.gallery-delete:active {
+  background: rgba(255, 92, 122, 0.16);
+}
+
+.gallery-delete:disabled {
+  opacity: 0.55;
 }
 
 .gallery-thumb.selected {
@@ -745,8 +771,9 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 }
 
 .gallery-strip-panel img {
+  flex: 1;
+  min-height: 0;
   width: 100%;
-  height: 100%;
   object-fit: contain;
   display: block;
 }
@@ -770,7 +797,8 @@ input[type="date"]::-webkit-calendar-picker-indicator {
   flex: 1;
   min-width: 0;
   display: flex;
-  justify-content: center;
+  flex-direction: column;
+  gap: var(--space-2);
 }
 
 .gallery-qr-panel {
@@ -929,6 +957,22 @@ input[type="date"]::-webkit-calendar-picker-indicator {
   line-height: var(--line-normal);
 }
 
+.share-progress {
+  height: 10px;
+  overflow: hidden;
+  border-radius: var(--radius-pill);
+  background: var(--surface);
+}
+
+.share-progress > div {
+  height: 100%;
+  background: var(--accent);
+  transform: scaleX(0);
+  transform-origin: left;
+  /* Transform only: glides between the 1-second polls without relayout on the Pi. */
+  transition: transform 1s linear;
+}
+
 .confirm-actions {
   display: flex;
   gap: var(--admin-gap-sm);
@@ -952,11 +996,136 @@ input[type="date"]::-webkit-calendar-picker-indicator {
   max-width: none;
 }
 
+.masked-secret,
+.pin-input {
+  -webkit-text-security: disc;
+}
+
+.masked-secret.is-visible {
+  -webkit-text-security: none;
+}
+
+.pin-input {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.18em;
+}
+
 .form-error {
   min-height: 1.25rem;
   margin: 0;
   color: var(--danger, #a43e32);
   text-align: center;
+}
+
+.operator-pin-panel {
+  width: min(320px, calc(100% - 32px));
+  padding: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  outline: none;
+}
+
+.operator-pin-heading {
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.operator-pin-cancel {
+  min-height: 32px;
+  padding: 0 var(--space-2);
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: var(--font-sm);
+}
+
+.operator-pin-display {
+  height: 54px;
+  padding: 8px 14px;
+  border: 1px solid var(--border-strong, var(--border));
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  align-items: center;
+  gap: 10px;
+}
+
+.operator-pin-slot {
+  height: 100%;
+  border-bottom: 2px solid var(--border);
+  display: grid;
+  place-items: center;
+  color: var(--text);
+  font-size: 1.65rem;
+  line-height: 1;
+}
+
+.operator-pin-slot.is-filled {
+  border-bottom-color: var(--accent);
+}
+
+.operator-pin-panel .form-error {
+  min-height: 18px;
+  font-size: var(--font-sm);
+  line-height: 18px;
+}
+
+.operator-pin-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+
+.operator-pin-key {
+  min-width: 0;
+  height: 52px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface, var(--bg));
+  color: var(--text);
+  font: inherit;
+  font-size: 1.3rem;
+  font-weight: var(--weight-semibold);
+  box-shadow: 0 1px 0 rgba(45, 38, 32, 0.08);
+}
+
+.operator-pin-key:active:not(:disabled) {
+  transform: translateY(1px);
+  background: var(--bg);
+  box-shadow: none;
+}
+
+.operator-pin-action {
+  color: var(--accent);
+}
+
+.operator-pin-action svg {
+  width: 23px;
+  height: 23px;
+  vertical-align: middle;
+}
+
+.operator-pin-unlock {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--accent-contrast, #fff);
+}
+
+.operator-pin-unlock:disabled {
+  border-color: var(--border);
+  background: var(--surface, var(--bg));
+  color: var(--muted);
+  opacity: 0.45;
 }
 
 .setup-eyebrow {
@@ -2059,8 +2228,8 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 }
 
 .qr-panel .qr-code {
-  width: 256px;
-  height: 256px;
+  width: 200px;
+  height: 200px;
   max-width: 100%;
   background: #fff;
   padding: var(--space-2);
@@ -2215,6 +2384,7 @@ input[type="date"]::-webkit-calendar-picker-indicator {
   display: flex;
   flex-direction: column;
   gap: var(--space-4);
+  padding-bottom: var(--space-5);
 }
 
 .set-group {
@@ -2419,6 +2589,69 @@ input[type="date"]::-webkit-calendar-picker-indicator {
   gap: var(--space-2);
 }
 
+.access-settings-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.access-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--control-radius);
+  background: var(--surface);
+}
+
+.access-description,
+.access-status {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--font-sm);
+  line-height: var(--line-normal);
+}
+
+.access-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+  font-size: var(--font-sm);
+  color: var(--text);
+}
+
+.access-field-wide {
+  grid-column: 1 / -1;
+}
+
+.access-field input,
+.access-field textarea {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--control-radius);
+  background: var(--bg-elevated);
+  color: var(--text);
+  font: inherit;
+  padding: var(--space-2) var(--space-3);
+  resize: vertical;
+}
+
+.access-field input {
+  min-height: var(--control-height);
+}
+
+.access-field textarea {
+  line-height: var(--line-normal);
+}
+
+.access-form > .btn {
+  justify-self: start;
+}
+
 .version-panel {
   display: flex;
   align-items: center;
@@ -2562,6 +2795,8 @@ input[type="date"]::-webkit-calendar-picker-indicator {
   overflow-y: auto;
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
+  /* Without max-content the clipped cards shrink to fit the scroller and lose their labels. */
+  grid-auto-rows: max-content;
   gap: var(--admin-gap);
   align-content: start;
   padding: var(--space-1) var(--space-1) var(--space-3);
@@ -2570,11 +2805,20 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 .template-manager-card {
   min-width: 0;
   display: grid;
-  grid-template-rows: 230px auto;
+  grid-template-rows: 210px auto;
+  padding: 0;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   overflow: hidden;
   background: var(--bg-elevated);
+  color: var(--text);
+  text-align: left;
+  font-weight: var(--weight-regular);
+  line-height: var(--line-tight);
+}
+
+.template-manager-card:active {
+  border-color: var(--accent);
 }
 
 .template-manager-card.is-archived > img {
@@ -2593,71 +2837,117 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 
 .template-manager-copy {
   min-width: 0;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-2);
+  display: grid;
+  gap: var(--space-1);
   padding: var(--space-3);
 }
 
-.template-manager-copy > div {
-  min-width: 0;
-  flex: 1;
-}
-
-.template-manager-copy h3,
-.template-manager-copy p {
+.template-manager-copy > * {
   overflow: hidden;
-  margin: 0;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.template-manager-copy h3 {
+.template-manager-copy strong {
   font-size: var(--font-md);
+  font-weight: var(--weight-semibold);
 }
 
-.template-manager-copy p {
-  margin-top: var(--space-1);
+.template-manager-copy span {
   color: var(--muted);
   font-size: var(--font-xs);
 }
 
-.template-manager-actions {
-  flex: none;
-  display: flex;
-  gap: var(--space-1);
+.template-manager-copy .template-usage.is-used {
+  color: var(--accent);
+  font-weight: var(--weight-semibold);
 }
 
-.template-action {
-  flex: 0 0 var(--touch-min);
-  width: var(--touch-min);
-  min-height: var(--touch-min);
+.template-detail-panel {
+  width: min(720px, 100%);
   display: grid;
-  place-items: center;
-  padding: 0;
-  border: 1px solid var(--border);
-  border-radius: var(--control-radius);
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: var(--space-6);
+  padding: var(--space-6);
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow);
+}
+
+.template-detail-strip {
+  height: 480px;
+  aspect-ratio: 1 / 3;
+  object-fit: contain;
+  border-radius: var(--radius-sm);
   background: var(--surface);
-  color: var(--text);
+  -webkit-user-drag: none;
 }
 
-.template-action svg {
-  width: 20px;
-  height: 20px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.8;
-  stroke-linecap: round;
-  stroke-linejoin: round;
+.template-detail-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
 }
 
-.template-delete {
-  color: var(--danger);
+.template-detail-copy h2,
+.template-detail-copy h3,
+.template-detail-copy p {
+  margin: 0;
 }
 
-.template-action:disabled {
-  opacity: 0.35;
+.template-detail-copy h2 {
+  font-size: var(--font-xl);
+  line-height: var(--line-tight);
+  overflow-wrap: anywhere;
+}
+
+.template-detail-copy h3 {
+  margin-top: var(--space-3);
+  color: var(--muted);
+  font-size: var(--font-sm);
+  font-weight: var(--weight-semibold);
+}
+
+.template-detail-meta {
+  color: var(--muted);
+  font-size: var(--font-sm);
+}
+
+.template-detail-events {
+  max-height: 168px;
+  overflow-y: auto;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.template-detail-events li {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.template-detail-events li span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: var(--weight-semibold);
+}
+
+.template-detail-events li span:last-child {
+  flex: none;
+  color: var(--muted);
+}
+
+.template-detail-actions {
+  margin-top: auto;
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--admin-gap-sm);
 }
 
 .template-manager-empty {

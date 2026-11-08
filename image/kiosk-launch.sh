@@ -37,6 +37,8 @@ COMMON_FLAGS=(
   --disable-dev-shm-usage
   --disable-restore-session-state
   --no-first-run
+  --disable-background-networking
+  --disable-component-update
   --js-flags=--max-old-space-size=128
   --ozone-platform=x11
   --start-maximized

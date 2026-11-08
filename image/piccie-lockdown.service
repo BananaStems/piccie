@@ -1,14 +1,14 @@
 [Unit]
-Description=Enable read-only root overlay after first-boot provisioning
-After=data-fallback.service
-ConditionPathExists=/data/.provisioned
-ConditionPathExists=!/data/.lockdown-done
+Description=Verify Piccie read-only root or apply recovery override
+DefaultDependencies=no
+RequiresMountsFor=/boot/firmware
+After=boot-firmware.mount
+Before=local-fs.target
 
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStartPre=/bin/sleep 5
 ExecStart=/usr/local/bin/piccie-lockdown
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=local-fs.target

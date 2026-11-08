@@ -27,10 +27,20 @@ python3 -m venv --system-site-packages "${INSTALL_DIR}/venv"
 install -m 644 "${INSTALL_DIR}/image/piccie-engine.service" /etc/systemd/system/
 install -m 755 "${INSTALL_DIR}/image/kiosk-launch.sh" /usr/local/bin/piccie-kiosk
 install -m 755 "${INSTALL_DIR}/image/piccie-update.sh" /usr/local/sbin/piccie-update
+install -m 755 "${INSTALL_DIR}/image/piccie-restart-engine" /usr/local/sbin/piccie-restart-engine
+install -m 440 "${INSTALL_DIR}/image/files/piccie-restart-engine-sudoers" /etc/sudoers.d/piccie-restart-engine
+visudo -cf /etc/sudoers.d/piccie-restart-engine >/dev/null
 install -m 755 "${INSTALL_DIR}/image/piccie-performance" /usr/local/sbin/piccie-performance
 install -m 440 "${INSTALL_DIR}/image/files/piccie-performance-sudoers" /etc/sudoers.d/piccie-performance
 visudo -cf /etc/sudoers.d/piccie-performance >/dev/null
+install -m 644 "${INSTALL_DIR}/image/piccie-performance-reboot.service" /etc/systemd/system/
+install -m 644 "${INSTALL_DIR}/image/piccie-performance-reboot.timer" /etc/systemd/system/
+install -m 755 "${INSTALL_DIR}/image/piccie-clock-sync" /usr/local/sbin/piccie-clock-sync
+install -m 440 "${INSTALL_DIR}/image/files/piccie-clock-sudoers" /etc/sudoers.d/piccie-clock
+visudo -cf /etc/sudoers.d/piccie-clock >/dev/null
 install -m 755 "${INSTALL_DIR}/image/piccie-shutdown" /usr/local/sbin/piccie-shutdown
+install -m 644 "${INSTALL_DIR}/image/piccie-poweroff.service" /etc/systemd/system/
+install -m 644 "${INSTALL_DIR}/image/piccie-poweroff.timer" /etc/systemd/system/
 install -m 440 "${INSTALL_DIR}/image/files/piccie-shutdown-sudoers" /etc/sudoers.d/piccie-shutdown
 visudo -cf /etc/sudoers.d/piccie-shutdown >/dev/null
 install -m 644 "${INSTALL_DIR}/image/piccie-bootdiag.service" /etc/systemd/system/
@@ -43,14 +53,14 @@ if [[ -d /boot/firmware && ! -e /boot/firmware/piccie-r2.txt ]]; then
   install -m 644 "${INSTALL_DIR}/image/files/piccie-r2.txt" /boot/firmware/piccie-r2.txt
 fi
 
-# Watertight (read-only root + writable /data) units + scripts.
+# Watertight read-only root + writable /data units and scripts. Root protection
+# is baked into cmdline/fstab; the verifier never rewrites live boot files.
 install -m 755 "${INSTALL_DIR}/image/piccie-grow-data.sh" /usr/local/sbin/piccie-grow-data
 install -m 755 "${INSTALL_DIR}/image/piccie-firstboot-datapart.sh" /usr/local/bin/piccie-firstboot-datapart
 install -m 755 "${INSTALL_DIR}/image/piccie-lockdown.sh" /usr/local/bin/piccie-lockdown
 install -m 644 "${INSTALL_DIR}/image/piccie-grow-data.service" /etc/systemd/system/
 install -m 644 "${INSTALL_DIR}/image/piccie-firstboot-datapart.service" /etc/systemd/system/
 install -m 644 "${INSTALL_DIR}/image/piccie-lockdown.service" /etc/systemd/system/
-install -m 644 "${INSTALL_DIR}/image/piccie-lockdown.path" /etc/systemd/system/
 install -m 644 "${INSTALL_DIR}/image/data-fallback.service" /etc/systemd/system/
 
 if id pi &>/dev/null; then
@@ -62,14 +72,34 @@ fi
 # password auth; the operator's key is provisioned to /data/ssh/authorized_keys.
 install -d /etc/ssh/sshd_config.d
 install -m 644 "${INSTALL_DIR}/image/files/sshd-piccie.conf" /etc/ssh/sshd_config.d/10-piccie.conf
+install -d /etc/systemd/system/ssh.service.d
+install -m 644 "${INSTALL_DIR}/image/files/ssh-piccie.conf" /etc/systemd/system/ssh.service.d/10-piccie.conf
 
 # Baked drop-in configs for read-only root.
 install -d /etc/systemd/system.conf.d /etc/systemd/journald.conf.d /etc/NetworkManager/conf.d
 install -m 644 "${INSTALL_DIR}/image/files/watchdog.conf" /etc/systemd/system.conf.d/10-watchdog.conf
 install -m 644 "${INSTALL_DIR}/image/files/journald-piccie.conf" /etc/systemd/journald.conf.d/10-volatile.conf
 install -m 644 "${INSTALL_DIR}/image/files/nm-keyfile-path.conf" /etc/NetworkManager/conf.d/00-piccie-keyfile-path.conf
+install -m 644 "${INSTALL_DIR}/image/files/nm-wifi-powersave.conf" /etc/NetworkManager/conf.d/20-piccie-wifi-powersave.conf
+install -d /etc/udev/rules.d /etc/rpi/swap.conf.d
+install -m 644 "${INSTALL_DIR}/image/files/60-ondemand-governor.rules" /etc/udev/rules.d/60-ondemand-governor.rules
+install -m 644 "${INSTALL_DIR}/image/files/rpi-swap-piccie.conf" /etc/rpi/swap.conf.d/10-piccie.conf
+# NetworkManager receives DNS from DHCP after root has become read-only. Point
+# libc at NetworkManager's writable runtime file instead of leaving a regular
+# /etc/resolv.conf that NetworkManager cannot replace.
+rm -f /etc/resolv.conf
+ln -s /run/NetworkManager/resolv.conf /etc/resolv.conf
 install -d /etc/polkit-1/rules.d
 install -m 644 "${INSTALL_DIR}/image/files/49-piccie-networkmanager.rules" /etc/polkit-1/rules.d/
+
+# These state directories must exist before root becomes read-only. lightdm
+# needs writable runtime/cache paths, while systemd-logind's StateDirectory=
+# cannot create /var/lib/systemd/linger on a read-only root. Without the latter,
+# PAM waits for logind and the kiosk session never reaches Openbox/Chromium.
+install -d -m 0755 /var/cache/lightdm
+install -d -m 0755 /var/lib/systemd/linger
+install -d /etc/tmpfiles.d
+install -m 644 "${INSTALL_DIR}/image/files/piccie-lightdm.conf" /etc/tmpfiles.d/piccie-lightdm.conf
 
 # Kiosk launches from openbox autostart, which runs INSIDE pi's X session and so
 # inherits DISPLAY/XAUTHORITY/XDG_RUNTIME_DIR/HOME. A multi-user.target service
@@ -89,10 +119,22 @@ fi
 # its failing network stage stalls boot for minutes. Mask it.
 systemctl mask cloud-init.service cloud-init-local.service cloud-init-main.service \
   cloud-init-network.service cloud-config.service cloud-final.service 2>/dev/null || true
+# Root is mounted ro by the kernel and enforced by piccie-lockdown. Disable the
+# distro-owned remount/root-growth paths: Piccie deliberately keeps p2 fixed and
+# owns growth of the final p3 data partition.
+systemctl mask systemd-remount-fs.service systemd-growfs-root.service rpi-resize.service
+# The booth never updates packages in place and root is read-only, so these
+# periodic jobs either fail daily (logrotate, dpkg-db-backup) or wake mid-event
+# to do work they cannot save. e2scrub only checks LVM volumes; there are none.
+systemctl mask apt-daily.timer apt-daily-upgrade.timer man-db.timer \
+  logrotate.timer dpkg-db-backup.timer e2scrub_all.timer e2scrub_reap.service
+# Bluetooth is off in config.txt (disable-bt, shares the Wi-Fi radio) and
+# nothing uses udisks2 automounting.
+systemctl mask bluetooth.service udisks2.service
 
 systemctl daemon-reload
 systemctl enable piccie-grow-data piccie-firstboot-datapart \
-  piccie-lockdown piccie-lockdown.path data-fallback piccie-engine \
+  piccie-lockdown data-fallback piccie-engine \
   piccie-bootdiag
 
 echo "Piccie appliance setup complete."

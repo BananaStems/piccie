@@ -10,7 +10,7 @@ DEVICE_OPTIONS = (
         "id": "pi4",
         "label": "Raspberry Pi 4 Model B",
         "performance_available": True,
-        "performance_detail": "Board-supported boost up to 1.8 GHz",
+        "performance_detail": "Up to 1.8 GHz (needs active cooling)",
     },
     {
         "id": "pi5",

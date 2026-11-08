@@ -19,6 +19,20 @@ Never commit `config/local.json`, `data/`, R2 credentials, Wi-Fi passwords, SSH
 private keys, photo strips, or a filled provisioning file. New dependencies need
 a clear Pi 4 benefit and must be pinned in `requirements.txt`.
 
+## Releasing an image
+
+Set `VERSION`, commit the complete source, and tag that commit `v<VERSION>`.
+Then run:
+
+```bash
+./image/release-image.sh
+```
+
+The release gate refuses a dirty or incorrectly tagged tree, runs the automated
+and QEMU appliance checks, compresses the image and writes its SHA-256 checksum.
+After inspecting those artifacts, `./image/release-image.sh --publish` replaces
+the matching GitHub release assets with the verified files.
+
 ## Hardware
 
 Open an issue before changing the reference enclosure or its mounting points.

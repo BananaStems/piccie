@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import os
 import platform
 import re
@@ -74,24 +75,7 @@ def _current_ssid_linux() -> str | None:
 
 def _nmcli_fields(line: str) -> list[str]:
     """Split terse nmcli output without breaking escaped ':' in an SSID."""
-    fields: list[str] = []
-    field: list[str] = []
-    escaped = False
-    for char in line:
-        if escaped:
-            field.append(char)
-            escaped = False
-        elif char == "\\":
-            escaped = True
-        elif char == ":":
-            fields.append("".join(field))
-            field = []
-        else:
-            field.append(char)
-    if escaped:
-        field.append("\\")
-    fields.append("".join(field))
-    return fields
+    return next(csv.reader([line], delimiter=":", escapechar="\\"))
 
 
 def _scan_ssids_mac() -> list[str]:

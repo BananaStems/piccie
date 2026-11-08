@@ -5,8 +5,10 @@ steps are:
 
 1. Download the Piccie image, or build it yourself.
 2. Flash the image to a microSD card.
-3. Add the one-time R2 configuration file.
-4. Start the Raspberry Pi and complete onboarding.
+3. Copy the completed one-time `piccie-r2.txt` file to the flashed card's boot
+   drive.
+4. Start the Raspberry Pi, configure Wi-Fi on its touchscreen and complete
+   onboarding.
 5. Test the booth, then run the soak test before using it at an event.
 
 ## What you need
@@ -141,19 +143,37 @@ To continue a failed full build without starting again:
    the downloaded `.img.xz` file or the generated `piccie.img` file from
    `.pi-gen/deploy/`.
 5. Select the microSD card as the storage target.
-6. Select **Next**, skip Raspberry Pi OS customisation if it is offered, and
-   write the image.
+6. Select **Next**, skip all Raspberry Pi OS customisation if it is offered,
+   and write the image. Do not configure Wi-Fi in Raspberry Pi Imager; Piccie
+   asks for the network and password on its own touchscreen.
 7. Wait for verification to finish before removing the card.
 
 Writing the image erases the selected card. Check the storage target carefully.
 
-## 3. Add your R2 settings
+## 3. Copy your R2 settings to the flashed card
 
 After Raspberry Pi Imager finishes, remove and reinsert the microSD card if its
-boot drive is not visible. The drive works on macOS, Windows and Linux.
+boot drive is not visible. The drive works on macOS, Windows and Linux. This
+step is required after every flash and must be completed before the card's first
+boot.
 
-1. Open `piccie-r2.txt` on the microSD boot drive. The file contains the same
-   instructions and blank settings to complete.
+If you build or flash cards from a Piccie source checkout, keep a reusable
+private copy at the project root:
+
+```sh
+./image/copy-r2-to-card.sh --init
+```
+
+Fill in the generated `piccie-r2.txt` once. Git ignores this private file. After
+each flash, reinsert the card and run `./image/copy-r2-to-card.sh`. The helper
+validates the settings and copies them to the top level of an identifiable
+Raspberry Pi boot volume. If auto-detection is ambiguous, pass the volume
+explicitly, such as `./image/copy-r2-to-card.sh /Volumes/bootfs`.
+
+If you are not using the helper:
+
+1. Open the blank `piccie-r2.txt` included on the microSD boot drive, or prepare
+   a copy on your computer. The file contains the same instructions.
 2. Sign in to the [Cloudflare dashboard](https://dash.cloudflare.com/), open
    **Storage & databases → R2**, and create a bucket named `piccie-photos`.
    Leave the bucket private.
@@ -165,7 +185,17 @@ boot drive is not visible. The drive works on macOS, Windows and Linux.
    lines in `piccie-r2.txt`. Cloudflare shows the secret only once.
 6. Leave `JURISDICTION=default` unless the bucket was explicitly created in the
    EU or FedRAMP jurisdiction.
-7. Save the file and safely eject the microSD card.
+7. Optional but recommended for remote maintenance: generate a dedicated SSH
+   key on your computer, then put only its `.pub` contents after
+   `SSH_AUTHORIZED_KEY=`. For example, run
+   `ssh-keygen -t ed25519 -f ~/.ssh/piccie_ed25519 -C piccie-deploy`. Keep the
+   private file (`~/.ssh/piccie_ed25519`) on your computer and never copy it to
+   the card.
+8. Save or copy the completed file to the top level of the microSD boot drive,
+   replacing the blank template if necessary. Its name must be exactly
+   `piccie-r2.txt`.
+9. Confirm the file is present on the boot drive, then safely eject the
+   microSD card.
 
 The file should contain only these settings after the comment instructions:
 
@@ -175,6 +205,7 @@ ACCESS_KEY_ID=your-r2-access-key-id
 SECRET_ACCESS_KEY=your-r2-secret-access-key
 BUCKET_NAME=piccie-photos
 JURISDICTION=default
+SSH_AUTHORIZED_KEY=ssh-ed25519 AAAA... piccie-deploy
 ```
 
 Piccie validates and moves these values into the writable data partition before
@@ -182,11 +213,42 @@ the engine starts, then removes the readable credential copy from the boot
 drive. It refuses incomplete files, unknown settings and degraded temporary
 storage. If validation fails, shut down and open `piccie-r2-status.txt` on the
 boot drive for the exact field to correct. The token should never grant access
-to any other bucket.
+to any other bucket. To rotate credentials later, place a newly completed
+`piccie-r2.txt` on the boot drive; the next boot validates and replaces the old
+R2 settings atomically.
 
 R2 remains private. Piccie creates signed guest download links that work for
 seven days, which is Cloudflare's maximum. Generate a new event link from the
 booth if an older event needs to be shared again.
+
+New photos use a readable event layout in R2:
+
+```text
+sarah-james-2026-06-14/
+├── strips/
+│   ├── sarah-james-strip-00001.jpg
+│   └── sarah-james-strip-00002.jpg
+├── photos/
+│   ├── sarah-james-strip-00001-photo-01.jpg
+│   ├── sarah-james-strip-00001-photo-02.jpg
+│   └── sarah-james-strip-00001-photo-03.jpg
+└── download-all.zip
+```
+
+The event name and date determine the folder name. Piccie adds `-2`, `-3` and
+so on only when two events would otherwise use the same folder. Strip numbers
+start at `00001`, never get reused after deletion, and stay attached to the
+same session. In the event gallery, choose **Share event** to show a QR code.
+Its **Download all photos** button downloads a ZIP containing both `strips/`
+and `photos/`; individual guest QR codes still open only that guest's finished
+strip. Older UUID-based R2 objects remain valid after an upgrade and are
+removed through the existing deletion flow.
+
+Do not add a Wi-Fi name or password to `piccie-r2.txt`. Wi-Fi is a separate
+on-device setup step and is stored by the Raspberry Pi's network manager.
+The SSH public key is not secret; its matching private key is. After onboarding,
+change or remove the four-digit operator PIN and SSH key under **Settings → Operator
+access**.
 
 ## 4. Complete first boot
 
@@ -196,16 +258,17 @@ data partition and automatically restarts once before showing setup. Do not
 remove power or the card during that restart.
 
 1. Insert the flashed microSD card and power on the booth.
-2. Choose the Wi-Fi network used for initial setup.
+2. On the Piccie touchscreen, choose the Wi-Fi network and enter its password.
 3. Confirm that Piccie found and securely imported the R2 file.
-4. Choose an operator PIN.
-5. Add your computer's SSH public key if you want remote updates and access to
-   the soak test, then finish setup.
+4. Choose a four-digit operator PIN.
+5. Confirm or add your computer's SSH public key if you want remote updates and
+   access to the soak test. A key included in `piccie-r2.txt` is already
+   installed; then finish setup.
 
 Piccie uploads a temporary private strip and downloads it through a signed R2
-link before completing onboarding. It then restarts once more to enable the
-read-only system protection. Keep power connected until the admin screen
-appears.
+link before completing onboarding. The system partition is protected as
+read-only from the first boot, so completing setup does not trigger another
+restart. The menu appears immediately after the checks finish.
 
 ## 5. Check the booth
 
@@ -214,7 +277,8 @@ Before a long reliability run:
 1. Create a test event.
 2. Complete several three-photo sessions.
 3. Confirm each strip appears in the event gallery.
-4. Scan a QR code and download a strip on another device.
+4. Disable Wi-Fi on a phone, scan a QR code over mobile data, and download the
+   strip. Guest downloads must not depend on access to the booth's LAN.
 5. Disconnect Wi-Fi, take another strip, then reconnect and confirm the queued
    upload completes.
 6. Check the camera framing, light, cooling fan and touchscreen response.
@@ -237,10 +301,12 @@ sudo DURATION_MINUTES=480 /data/app/current/scripts/pi_soak.sh
 
 The test uses the booth's configured camera, completes the full three-photo
 flow, waits for every R2 upload, downloads each guest link and byte-compares it
-with the local strip. It also checks the engine, Chromium, memory growth,
-temperature, throttling, free storage, upload backlog and process restarts. A
-healthy run ends with `soak_pass` and prints the log path. Do not use the booth
-for guests while this test is running.
+with the local strip. It also verifies that the active Wi-Fi profile is stored
+on `/data`, measures the real settings-preview frame rate, watches the kiosk
+page heartbeat, and checks the engine, Chromium, memory growth, temperature,
+throttling, free storage, upload backlog and process restarts. A healthy run
+ends with `soak_pass` and prints the log path. Do not use the booth for guests
+while this test is running.
 
 For development without R2 only, set `SKIP_UPLOAD_CHECK=1`. Never use that
 option for an event-readiness run.
@@ -251,6 +317,11 @@ on the booth at an event:
 ```bash
 journalctl -u piccie-engine
 ```
+
+The latest two persistent boot snapshots are kept in
+`/data/diag/piccie-boot-diag.txt` and
+`/data/diag/piccie-boot-diag.previous.txt`. They include a persistent boot
+count, reset/throttling evidence, service state and recent logs.
 
 ## Updating an installed booth
 

@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# Recover a Pi without an RTC, then obtain a signed-request-safe HTTPS time.
+set -euo pipefail
+
+[[ "$(id -u)" -eq 0 || "${PICCIE_ALLOW_NON_ROOT_TEST:-0}" == "1" ]] \
+  || { echo "piccie-clock-sync must run as root" >&2; exit 2; }
+[[ "$#" -eq 0 ]] || { echo "piccie-clock-sync takes no arguments" >&2; exit 2; }
+
+if [[ "${BASH_SOURCE[0]}" == "/usr/local/sbin/piccie-clock-sync" ]]; then
+  STATE=/data/.piccie-last-clock
+  MARKER=/run/piccie.clock-synchronized
+  CURL=/usr/bin/curl
+  DATE=/usr/bin/date
+else
+  STATE="${PICCIE_CLOCK_STATE:?test clock state required}"
+  MARKER="${PICCIE_CLOCK_MARKER:?test clock marker required}"
+  CURL="${PICCIE_CURL:?test curl path required}"
+  DATE="${PICCIE_DATE:?test date path required}"
+fi
+
+now="$("${DATE}" -u +%s)"
+if [[ -r "${STATE}" ]]; then
+  read -r saved <"${STATE}" || true
+  if [[ "${saved:-}" =~ ^[0-9]+$ && "${saved}" -gt "${now}" ]]; then
+    "${DATE}" -u -s "@${saved}" >/dev/null
+  fi
+fi
+
+if [[ -e /run/systemd/timesync/synchronized ]] ||
+   [[ "$(timedatectl show --property=NTPSynchronized --value 2>/dev/null || true)" == "yes" ]]; then
+  "${DATE}" -u +%s >"${STATE}"
+  touch "${MARKER}"
+  exit 0
+fi
+
+headers="$("${CURL}" -fsSI --max-time 8 https://www.cloudflare.com/)"
+remote_date="$(printf '%s\n' "${headers}" | awk 'tolower($1) == "date:" {$1=""; sub(/^ /, ""); sub(/\r$/, ""); value=$0} END {print value}')"
+[[ -n "${remote_date}" ]] || { echo "trusted HTTPS response had no Date header" >&2; exit 1; }
+remote_epoch="$("${DATE}" -u -d "${remote_date}" +%s)"
+[[ "${remote_epoch}" -ge 1704067200 ]] || { echo "trusted HTTPS time was implausible" >&2; exit 1; }
+"${DATE}" -u -s "@${remote_epoch}" >/dev/null
+printf '%s\n' "${remote_epoch}" >"${STATE}"
+touch "${MARKER}"

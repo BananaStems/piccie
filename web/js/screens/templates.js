@@ -1,7 +1,20 @@
+import { isoToDisplay } from "./editor.js";
+
+const SAVED_AT = new Intl.DateTimeFormat(undefined, { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" });
+
 export function renderTemplatesScreen({ app, state, render, api, escapeHtml, showConfirm }) {
   const showingArchived = state.templateView === "archived";
   const archivedCount = state.templates.filter((item) => item.archived).length;
   const visibleTemplates = state.templates.filter((item) => item.archived === showingArchived);
+  const eventsFor = (template) => (state.events || []).filter((event) => event.template_id === template.id);
+  const previewSrc = (template) => api.previewUrl(template.id, "YOUR EVENT", "2026-08-01", "CELEBRATION", ".");
+  const originLabel = (template) => template.custom
+    ? (template.created_at ? `Saved ${SAVED_AT.format(new Date(template.created_at))}` : "Custom")
+    : "Built in";
+  const usageLabel = (events) => events.length
+    ? `Used in ${events[0].name}${events.length > 1 ? ` +${events.length - 1}` : ""}`
+    : "Not used yet";
+
   app.innerHTML = `
     <div class="screen admin-page templates-screen has-bottom-bar">
       <div class="admin-topbar">
@@ -9,16 +22,17 @@ export function renderTemplatesScreen({ app, state, render, api, escapeHtml, sho
         <span class="topbar-status">${visibleTemplates.length} ${showingArchived ? "archived" : "available"}</span>
       </div>
       <div class="template-manager-grid drag-scroll">
-        ${visibleTemplates.length ? visibleTemplates.map((template) => `
-          <article class="template-manager-card${template.archived ? " is-archived" : ""}">
-            <img src="${api.previewUrl(template.id, "YOUR EVENT", "2026-08-01", "CELEBRATION", ".")}" alt="${escapeHtml(template.name)} template preview" draggable="false" />
-            <div class="template-manager-copy">
-              <div><h3>${escapeHtml(template.name)}</h3><p>${template.custom ? (template.archived ? "Archived" : "Custom") : "Built in"} · ${template.event_count} event${template.event_count === 1 ? "" : "s"}</p></div>
-              ${template.custom ? `<div class="template-manager-actions">${template.archived
-                ? `<button class="template-action template-restore" type="button" data-template="${template.id}" aria-label="Restore ${escapeHtml(template.name)}" title="Restore template"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7v5h5"/><path d="M5.5 11a7 7 0 1 1 1.8 7.2"/></svg></button><button class="template-action template-delete" type="button" data-template="${template.id}" aria-label="Delete ${escapeHtml(template.name)} permanently" title="${template.event_count ? "Used templates cannot be deleted" : "Delete permanently"}"${template.event_count ? " disabled" : ""}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3m3 0-1 13H7L6 7m4 4v5m4-5v5"/></svg></button>`
-                : `<button class="template-action template-archive" type="button" data-template="${template.id}" aria-label="Archive ${escapeHtml(template.name)}" title="Archive template"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16v13H4zM3 4h18v3H3zm6 7h6"/></svg></button>`}</div>` : ""}
-            </div>
-          </article>`).join("") : `<p class="template-manager-empty">No archived templates.</p>`}
+        ${visibleTemplates.length ? visibleTemplates.map((template) => {
+          const events = eventsFor(template);
+          return `<button class="template-manager-card${template.archived ? " is-archived" : ""}" type="button" data-template="${template.id}" aria-label="View ${escapeHtml(template.name)}">
+            <img src="${previewSrc(template)}" alt="" draggable="false" />
+            <span class="template-manager-copy">
+              <strong>${escapeHtml(template.name)}</strong>
+              <span>${escapeHtml(originLabel(template))}</span>
+              <span class="template-usage${events.length ? " is-used" : ""}">${escapeHtml(usageLabel(events))}</span>
+            </span>
+          </button>`;
+        }).join("") : `<p class="template-manager-empty">${showingArchived ? "No archived templates." : "No templates."}</p>`}
       </div>
       <p class="error-text template-manager-error" id="template-manager-error" role="alert"></p>
       <nav class="bottom-bar" aria-label="Template actions">
@@ -50,56 +64,85 @@ export function renderTemplatesScreen({ app, state, render, api, escapeHtml, sho
       button.disabled = false;
     }
   };
-  app.querySelectorAll(".template-archive").forEach((button) => {
-    button.onclick = async () => {
-      const template = state.templates.find((item) => item.id === button.dataset.template);
-      const confirmed = await showConfirm({
-        title: "Archive template?",
-        message: template.event_count
-          ? `It stays available to ${template.event_count} existing event${template.event_count === 1 ? "" : "s"}, but cannot be selected for new events.`
-          : "It will no longer appear when creating events.",
-        confirmLabel: "Archive",
+  app.querySelectorAll(".template-manager-card").forEach((card) => {
+    card.onclick = () => showDetail(state.templates.find((item) => item.id === card.dataset.template));
+  });
+
+  async function refresh() {
+    state.templates = await api.listTemplates();
+    render();
+  }
+
+  function showDetail(template) {
+    if (!template) return;
+    const events = eventsFor(template);
+    const used = events.length > 0;
+    const eyebrow = !template.custom ? "Built-in template" : template.archived ? "Archived template" : "Custom template";
+    const note = !template.custom
+      ? "Built-in templates are always available."
+      : used
+        ? (template.archived
+          ? "Its events still print with it. It can't be deleted while an event uses it."
+          : "Archiving hides it from new events. Its events still print with it.")
+        : "";
+    const overlay = document.createElement("div");
+    overlay.className = "confirm-overlay";
+    overlay.innerHTML = `<section class="template-detail-panel" role="dialog" aria-modal="true" aria-labelledby="template-detail-title">
+      <img class="template-detail-strip" src="${previewSrc(template)}" alt="${escapeHtml(template.name)} strip preview" draggable="false" />
+      <div class="template-detail-copy">
+        <p class="setup-eyebrow">${eyebrow}</p>
+        <h2 id="template-detail-title">${escapeHtml(template.name)}</h2>
+        ${template.custom ? `<p class="template-detail-meta">${escapeHtml(originLabel(template))}</p>` : ""}
+        <h3>Used in</h3>
+        ${events.length
+          ? `<ul class="template-detail-events">${events.map((event) => `<li><span>${escapeHtml(event.name)}</span><span>${escapeHtml(isoToDisplay(event.date))}</span></li>`).join("")}</ul>`
+          : `<p class="template-detail-meta">No events yet.</p>`}
+        ${note ? `<p class="template-detail-meta">${note}</p>` : ""}
+        <p class="error-text" role="alert"></p>
+        <div class="template-detail-actions">
+          ${template.custom && !used ? `<button class="btn btn-danger" type="button" data-action="delete">Delete</button>` : ""}
+          ${template.custom ? `<button class="btn btn-secondary" type="button" data-action="${template.archived ? "restore" : "archive"}">${template.archived ? "Restore" : "Archive"}</button>` : ""}
+          <button class="btn" type="button" data-action="close">Done</button>
+        </div>
+      </div>
+    </section>`;
+    const errorEl = overlay.querySelector(".error-text");
+    const close = () => overlay.remove();
+    const run = async (work) => {
+      overlay.querySelectorAll("button").forEach((button) => { button.disabled = true; });
+      try {
+        await work();
+      } catch (error) {
+        errorEl.textContent = error.message;
+        overlay.querySelectorAll("button").forEach((button) => { button.disabled = false; });
+        return;
+      }
+      close();
+      refresh().catch((error) => {
+        document.getElementById("template-manager-error").textContent = error.message;
       });
-      if (!confirmed) return;
-      try {
-        await api.archiveTemplate(template.id);
-        state.templates = await api.listTemplates();
-        render();
-      } catch (error) {
-        document.getElementById("template-manager-error").textContent = error.message;
-      }
     };
-  });
-  app.querySelectorAll(".template-restore").forEach((button) => {
-    button.onclick = async () => {
-      try {
-        await api.restoreTemplate(button.dataset.template);
-        state.templates = await api.listTemplates();
-        render();
-      } catch (error) {
-        document.getElementById("template-manager-error").textContent = error.message;
-      }
+    overlay.onclick = (event) => {
+      if (event.target === overlay) close();
     };
-  });
-  app.querySelectorAll(".template-delete").forEach((button) => {
-    button.onclick = async () => {
-      const template = state.templates.find((item) => item.id === button.dataset.template);
+    overlay.querySelector('[data-action="close"]').onclick = close;
+    const archive = overlay.querySelector('[data-action="archive"]');
+    if (archive) archive.onclick = () => run(() => api.archiveTemplate(template.id));
+    const restore = overlay.querySelector('[data-action="restore"]');
+    if (restore) restore.onclick = () => run(() => api.restoreTemplate(template.id));
+    const remove = overlay.querySelector('[data-action="delete"]');
+    if (remove) remove.onclick = async () => {
       const confirmed = await showConfirm({
         title: "Delete template permanently?",
         message: `${template.name} and its assets will be permanently removed from this booth.`,
         confirmLabel: "Delete",
         danger: true,
       });
-      if (!confirmed) return;
-      try {
-        await api.deleteTemplate(template.id);
-        state.templates = await api.listTemplates();
-        render();
-      } catch (error) {
-        document.getElementById("template-manager-error").textContent = error.message;
-      }
+      if (confirmed) run(() => api.deleteTemplate(template.id));
     };
-  });
+    document.getElementById("booth-frame").appendChild(overlay);
+    overlay.querySelector('[data-action="close"]').focus();
+  }
 
   function showPairing(url) {
     const overlay = document.createElement("div");
@@ -111,8 +154,7 @@ export function renderTemplatesScreen({ app, state, render, api, escapeHtml, sho
     </section>`;
     overlay.querySelector("button").onclick = async () => {
       overlay.remove();
-      state.templates = await api.listTemplates();
-      render();
+      await refresh();
     };
     document.getElementById("booth-frame").appendChild(overlay);
   }

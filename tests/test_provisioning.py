@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from engine.clock import ClockNotSynchronizedError
 from engine.config import R2Config
 from engine.provisioning import _r2_probe
 
@@ -11,35 +12,28 @@ from engine.provisioning import _r2_probe
 def test_r2_probe_uses_guest_strip_route_and_cleans_up(monkeypatch):
     class FakeUploader:
         body = b""
-        uploaded_token = ""
+        event_id = ""
         verified = False
         deleted = []
 
         def __init__(self, _config):
             pass
 
-        @staticmethod
-        def new_session_share_token(event_id, session_id):
-            return f"{event_id}.{session_id}.probe"
-
         def upload_session(
             self,
             session_dir: Path,
-            _event_id,
+            event_id,
             _session_id,
-            _event_name,
-            _event_date,
-            share_token=None,
         ):
             type(self).body = (session_dir / "strip.jpg").read_bytes()
-            type(self).uploaded_token = share_token
-            return f"https://gallery.example/s/{share_token}", share_token
+            type(self).event_id = event_id
+            return "https://gallery.example/probe"
 
         def delete_target(self, target):
             type(self).deleted.append(target)
 
         def verify_guest_download(self, url, expected_path):
-            assert url == f"https://gallery.example/s/{self.uploaded_token}"
+            assert url == "https://gallery.example/probe"
             assert expected_path.read_bytes() == self.body
             type(self).verified = True
 
@@ -49,11 +43,8 @@ def test_r2_probe_uses_guest_strip_route_and_cleans_up(monkeypatch):
         R2Config("acct", "key", "secret", "photos")
     )
 
-    assert ".probe" in FakeUploader.uploaded_token
     assert FakeUploader.verified is True
-    assert FakeUploader.deleted == [
-        f"event:{FakeUploader.uploaded_token.split('.', 1)[0]}"
-    ]
+    assert FakeUploader.deleted == [f"event:{FakeUploader.event_id}"]
 
 
 def test_r2_probe_fails_closed_on_wrong_guest_bytes_and_still_cleans(monkeypatch):
@@ -63,12 +54,8 @@ def test_r2_probe_fails_closed_on_wrong_guest_bytes_and_still_cleans(monkeypatch
         def __init__(self, _config):
             pass
 
-        @staticmethod
-        def new_session_share_token(event_id, session_id):
-            return f"{event_id}.{session_id}.probe"
-
-        def upload_session(self, *_args, share_token=None):
-            return f"https://gallery.example/s/{share_token}", share_token
+        def upload_session(self, *_args):
+            return "https://gallery.example/probe"
 
         def delete_target(self, target):
             type(self).deleted.append(target)
@@ -84,3 +71,21 @@ def test_r2_probe_fails_closed_on_wrong_guest_bytes_and_still_cleans(monkeypatch
         )
 
     assert len(FakeUploader.deleted) == 1
+
+
+def test_r2_probe_does_not_enter_cleanup_before_clock_sync(monkeypatch):
+    monkeypatch.setattr(
+        "engine.provisioning.wait_for_system_clock",
+        lambda: (_ for _ in ()).throw(
+            ClockNotSynchronizedError("clock has not synchronized")
+        ),
+    )
+    monkeypatch.setattr(
+        "engine.provisioning.R2Uploader",
+        lambda _config: (_ for _ in ()).throw(
+            AssertionError("uploader should not exist before clock sync")
+        ),
+    )
+
+    with pytest.raises(ClockNotSynchronizedError):
+        _r2_probe(R2Config("acct", "key", "secret", "photos"))

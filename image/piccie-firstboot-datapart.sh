@@ -23,6 +23,17 @@ install -d -m 700 -o root -g root /data/system-connections   # NM keyfiles stay 
 install -d -o pi -g pi /data/diag
 install -d -o pi -g pi /data/ssh
 
+# Raspberry Pi OS removes image-time SSH host keys so every installation gets a
+# unique identity. Generate that identity on persistent /data because the
+# appliance root is already read-only when ssh.service starts.
+if [ ! -s /data/ssh/ssh_host_ed25519_key ] || [ ! -s /data/ssh/ssh_host_ed25519_key.pub ]; then
+  rm -f /data/ssh/ssh_host_ed25519_key /data/ssh/ssh_host_ed25519_key.pub
+  ssh-keygen -q -t ed25519 -N '' -f /data/ssh/ssh_host_ed25519_key
+fi
+chown root:root /data/ssh/ssh_host_ed25519_key /data/ssh/ssh_host_ed25519_key.pub
+chmod 600 /data/ssh/ssh_host_ed25519_key
+chmod 644 /data/ssh/ssh_host_ed25519_key.pub
+
 # Runtime code lives on /data so updates can be switched atomically while the OS
 # and factory copy remain read-only. The image's venv is intentionally shared;
 # dependency changes are delivered as appliance images, not live mutations.

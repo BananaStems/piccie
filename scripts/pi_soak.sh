@@ -16,6 +16,7 @@ MIN_DISK_FREE_MB="${MIN_DISK_FREE_MB:-500}"
 MAX_UPLOAD_BACKLOG="${MAX_UPLOAD_BACKLOG:-0}"
 SKIP_UPLOAD_CHECK="${SKIP_UPLOAD_CHECK:-0}"
 BASE_URL="${BASE_URL:-http://localhost:8080}"
+MIN_PREVIEW_FPS="${MIN_PREVIEW_FPS:-5}"
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 START_EPOCH="$(date +%s)"
 LOG_FILE="${LOG_FILE:-/tmp/piccie-soak-$(date +%Y%m%d-%H%M%S).log}"
@@ -73,6 +74,31 @@ systemctl is-active --quiet piccie-engine
 KIOSK_PID_START="$(kiosk_pid)"
 [[ -n "${KIOSK_PID_START}" ]]
 
+WIFI_DEVICE="$(nmcli -t -f DEVICE,TYPE,STATE device | awk -F: '$2=="wifi" && $3=="connected" {print $1; exit}')"
+[[ -n "${WIFI_DEVICE}" ]] || { echo "No active Wi-Fi device" >&2; false; }
+WIFI_CONNECTION="$(nmcli -g GENERAL.CONNECTION device show "${WIFI_DEVICE}")"
+WIFI_UUID="$(nmcli -g connection.uuid connection show "${WIFI_CONNECTION}")"
+WIFI_KEYFILE="$(grep -l -m1 "^uuid=${WIFI_UUID}$" /data/system-connections/*.nmconnection 2>/dev/null | head -1 || true)"
+[[ "${WIFI_KEYFILE}" == /data/system-connections/* ]] || {
+  echo "Wi-Fi profile is not persisted on /data: ${WIFI_KEYFILE:-missing}" >&2
+  false
+}
+
+python3 - "${BASE_URL}" "${MIN_PREVIEW_FPS}" <<'PY'
+import sys, time, urllib.request
+base, minimum = sys.argv[1].rstrip("/"), float(sys.argv[2])
+started = time.monotonic()
+for _ in range(10):
+    with urllib.request.urlopen(f"{base}/api/camera/frame", timeout=10) as response:
+        frame = response.read()
+    if not (frame.startswith(b"\xff\xd8") and frame.endswith(b"\xff\xd9")):
+        raise SystemExit("camera preview returned an invalid JPEG")
+fps = 10 / (time.monotonic() - started)
+if fps < minimum:
+    raise SystemExit(f"camera preview too slow: {fps:.1f} fps < {minimum:.1f} fps")
+print(f"preview_fps={fps:.1f}")
+PY
+
 ENGINE_RESTARTS_START="$(service_restarts piccie-engine)"
 ENGINE_MEMORY_START="$(service_memory_mb piccie-engine)"
 KIOSK_MEMORY_START="$(kiosk_memory_mb)"
@@ -92,6 +118,10 @@ while (( DEADLINE > 0 || round <= ROUNDS )); do
 
   systemctl is-active --quiet piccie-engine
   [[ "$(kiosk_pid)" == "${KIOSK_PID_START}" ]]
+  KIOSK_HEARTBEAT_AGE="$(curl -fsS "${BASE_URL}/api/kiosk/status" | python3 -c 'import json,sys; print(json.load(sys.stdin)["heartbeat_age_seconds"])')"
+  [[ "${KIOSK_HEARTBEAT_AGE}" != "None" ]] \
+    && awk "BEGIN { exit !(${KIOSK_HEARTBEAT_AGE} < 15) }" \
+    || { echo "Kiosk page heartbeat is missing or stale" >&2; false; }
   python3 "${REPO_DIR}/scripts/soak_test.py" \
     --base "${BASE_URL}" \
     --sessions "${SESSIONS_PER_ROUND}" \

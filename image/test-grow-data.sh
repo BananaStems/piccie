@@ -55,6 +55,9 @@ setup_fixture() {
   WRITE_STUCK_FILE="${FIXTURE}/write-stuck"
   RESIZE_STUCK_FILE="${FIXTURE}/resize-stuck"
   LABEL_FILE="${FIXTURE}/label"
+  DEVICE_UNAVAILABLE_FILE="${FIXTURE}/device-unavailable"
+  KERNEL_CMDLINE="${FIXTURE}/cmdline"
+  DEVICE_WAIT_SECONDS=60
 
   printf '3\n' >"${SYS_BLOCK}/fakediskp3/partition"
   printf '128\n' >"${SYS_BLOCK}/fakediskp3/start"
@@ -63,6 +66,7 @@ setup_fixture() {
   printf '16\n' >"${FS_BLOCKS_FILE}"
   printf 'unmounted\n' >"${MOUNT_STATE_FILE}"
   printf 'data\n' >"${LABEL_FILE}"
+  : >"${KERNEL_CMDLINE}"
   : >"${ACTIONS_FILE}"
 }
 
@@ -82,6 +86,7 @@ findmnt() {
   local arg
   for arg in "$@"; do
     if [[ "${arg}" == "--fstab" ]]; then
+      [[ ! -e "${DEVICE_UNAVAILABLE_FILE}" ]] || return 1
       printf '/dev/fakediskp3\n'
       return
     fi
@@ -182,6 +187,7 @@ tune2fs() {
 }
 
 e2fsck() {
+  [[ "$*" == "-pf -E nodiscard /dev/fakediskp3" ]] || return 99
   printf 'e2fsck\n' >>"${ACTIONS_FILE}"
   return 0
 }
@@ -223,7 +229,19 @@ test_full_device_is_idempotent() {
   printf '512\n' >"${SYS_BLOCK}/fakediskp3/size"
   printf '64\n' >"${FS_BLOCKS_FILE}"
   main >"${OUTPUT_FILE}" 2>&1
-  [[ ! -s "${ACTIONS_FILE}" ]] || fail "idempotent run performed a mutating action"
+  assert_equals "$(tr '\n' ' ' <"${ACTIONS_FILE}")" "e2fsck "
+  assert_contains "${OUTPUT_FILE}" "already use the full device"
+}
+
+test_qemu_smoke_skips_emulated_fsck() {
+  setup_fixture
+  printf '512\n' >"${TABLE_SIZE_FILE}"
+  printf '512\n' >"${SYS_BLOCK}/fakediskp3/size"
+  printf '64\n' >"${FS_BLOCKS_FILE}"
+  printf 'console=ttyAMA0 piccie.qemu=1 root=/dev/fakediskp2\n' >"${KERNEL_CMDLINE}"
+  main >"${OUTPUT_FILE}" 2>&1
+  [[ ! -s "${ACTIONS_FILE}" ]] || fail "QEMU idempotency check unexpectedly ran filesystem tools"
+  assert_contains "${OUTPUT_FILE}" "QEMU smoke mode: skipping e2fsck"
   assert_contains "${OUTPUT_FILE}" "already use the full device"
 }
 
@@ -245,6 +263,17 @@ test_wrong_partition_number_fails_without_changes() {
   fi
   [[ ! -s "${ACTIONS_FILE}" ]] || fail "wrong partition number changed state"
   assert_contains "${OUTPUT_FILE}" "expected the dedicated p3"
+}
+
+test_missing_data_device_times_out_without_changes() {
+  setup_fixture
+  touch "${DEVICE_UNAVAILABLE_FILE}"
+  DEVICE_WAIT_SECONDS=0
+  if (main) >"${OUTPUT_FILE}" 2>&1; then
+    fail "missing data device was accepted"
+  fi
+  assert_contains "${OUTPUT_FILE}" "timed out waiting for ${DATA_MOUNT} block device"
+  [[ ! -s "${ACTIONS_FILE}" ]] || fail "missing device caused a mutating action"
 }
 
 test_nonfinal_partition_fails_without_changes() {
@@ -350,39 +379,68 @@ test_systemd_ordering_keeps_growth_offline() {
   local fallback_unit="${REPO_ROOT}/image/data-fallback.service"
   local seed_unit="${REPO_ROOT}/image/piccie-firstboot-datapart.service"
   local engine_unit="${REPO_ROOT}/image/piccie-engine.service"
+  local qemu_runner="${REPO_ROOT}/image/run-qemu.sh"
+  local fstab="${REPO_ROOT}/image/pigen/fstab"
 
   assert_contains "${grow_unit}" "Before=local-fs-pre.target data.mount"
+  assert_contains "${grow_unit}" "Wants=systemd-udevd.service systemd-udev-trigger.service"
+  assert_contains "${grow_unit}" "After=systemd-udevd.service systemd-udev-trigger.service"
+  assert_not_contains "${grow_unit}" "systemd-udev-settle.service"
   assert_contains "${grow_unit}" "WantedBy=sysinit.target"
+  assert_contains "${fstab}" "x-systemd.before=NetworkManager.service  0  0"
   assert_contains "${fallback_unit}" "After=piccie-grow-data.service local-fs.target data.mount"
   assert_contains "${fallback_unit}" "/run/piccie-data-grow.failed"
   assert_contains "${seed_unit}" "Requires=data-fallback.service"
   assert_contains "${engine_unit}" "Requires=data-fallback.service"
+  assert_contains "${engine_unit}" "Wants=systemd-timesyncd.service"
+  assert_contains "${qemu_runner}" 'root=${ROOT_DEV} ro rootwait'
+  assert_not_contains "${qemu_runner}" 'root=${ROOT_DEV} rw rootwait'
+  assert_contains "${qemu_runner}" 'cp -c "${IMG}" "${QEMU_IMG}"'
+  assert_contains "${qemu_runner}" 'format=raw,if=sd'
+  assert_contains "${qemu_runner}" 'systemd.log_target=kmsg'
+  assert_contains "${qemu_runner}" 'systemd.journald.forward_to_console=1'
+  assert_contains "${REPO_ROOT}/image/smoke-qemu.sh" 'reboot: Restarting system'
 }
 
-test_provisioning_triggers_one_time_lockdown() {
+test_root_is_readonly_without_runtime_boot_mutation() {
   local setup="${REPO_ROOT}/image/setup-appliance.sh"
-  local path_unit="${REPO_ROOT}/image/piccie-lockdown.path"
   local service="${REPO_ROOT}/image/piccie-lockdown.service"
   local script="${REPO_ROOT}/image/piccie-lockdown.sh"
+  local cmdline="${REPO_ROOT}/image/pigen/cmdline.txt"
+  local fstab="${REPO_ROOT}/image/pigen/fstab"
+  local final_stage="${REPO_ROOT}/image/pi-gen/stage2-piccie/01-piccie/00-run.sh"
 
-  assert_contains "${setup}" "piccie-lockdown.path"
-  assert_contains "${path_unit}" "PathExists=/data/.lockdown-requested"
-  assert_contains "${path_unit}" "Unit=piccie-lockdown.service"
-  assert_contains "${service}" "ConditionPathExists=/data/.provisioned"
-  assert_contains "${service}" "ExecStartPre=/bin/sleep 5"
-  assert_contains "${script}" "rm -f /data/.lockdown-requested"
-  assert_contains "${script}" "systemctl reboot"
+  assert_contains "${setup}" "piccie-lockdown data-fallback"
+  assert_contains "${service}" "WantedBy=local-fs.target"
+  assert_contains "${service}" "RequiresMountsFor=/boot/firmware"
+  assert_contains "${script}" "piccie-no-readonly"
+  assert_contains "${script}" "remount,rw"
+  assert_contains "${script}" "remount,ro"
+  assert_contains "${setup}" "systemctl mask systemd-remount-fs.service"
+  assert_contains "${cmdline}" "rootfstype=ext4 ro "
+  assert_contains "${fstab}" "ext4    ro,noatime"
+  assert_contains "${final_stage}" "piccie-src/image/pigen/cmdline.txt"
+  assert_contains "${final_stage}" "piccie-src/image/pigen/fstab"
+  assert_not_contains "${script}" "raspi-config nonint"
+  assert_not_contains "${script}" "overlayroot="
+  assert_not_contains "${script}" "systemctl reboot"
+  assert_not_contains "${setup}" "piccie-lockdown.path"
 }
 
 test_safe_shutdown_uses_narrow_privileged_helper() {
   local setup="${REPO_ROOT}/image/setup-appliance.sh"
   local helper="${REPO_ROOT}/image/piccie-shutdown"
   local sudoers="${REPO_ROOT}/image/files/piccie-shutdown-sudoers"
+  local poweroff_service="${REPO_ROOT}/image/piccie-poweroff.service"
+  local poweroff_timer="${REPO_ROOT}/image/piccie-poweroff.timer"
 
   assert_contains "${setup}" "install -m 755 \"\${INSTALL_DIR}/image/piccie-shutdown\" /usr/local/sbin/piccie-shutdown"
   assert_contains "${setup}" "visudo -cf /etc/sudoers.d/piccie-shutdown"
   assert_contains "${helper}" "sync"
-  assert_contains "${helper}" "/usr/bin/systemctl poweroff"
+  assert_contains "${helper}" "start \"\${UNIT}.timer\""
+  assert_contains "${helper}" "is-active --quiet \"\${UNIT}.timer\""
+  assert_contains "${poweroff_service}" "/usr/bin/systemctl --no-block poweroff"
+  assert_contains "${poweroff_timer}" "OnActiveSec=3s"
   assert_contains "${sudoers}" "NOPASSWD: /usr/local/sbin/piccie-shutdown"
   assert_not_contains "${sudoers}" "/usr/bin/systemctl"
 }
@@ -403,6 +461,23 @@ test_r2_boot_file_is_imported_before_engine_start() {
   assert_not_contains "${template}" "PUBLIC_URL="
 }
 
+test_recovery_and_release_contracts_are_baked_into_image() {
+  local setup="${REPO_ROOT}/image/setup-appliance.sh"
+  local smoke="${REPO_ROOT}/image/smoke-qemu.sh"
+  local bootdiag="${REPO_ROOT}/image/bootdiag.sh"
+  local updater_sudoers="${REPO_ROOT}/image/files/piccie-restart-engine-sudoers"
+
+  assert_contains "${setup}" "piccie-clock-sync"
+  assert_contains "${setup}" "piccie-restart-engine"
+  assert_contains "${setup}" "piccie-poweroff.timer"
+  assert_contains "${smoke}" "Application startup complete"
+  assert_contains "${smoke}" "PICCIE_QEMU_NETWORK=0"
+  assert_contains "${bootdiag}" "piccie-boot-diag.previous.txt"
+  assert_contains "${bootdiag}" "piccie-boot-count"
+  assert_contains "${updater_sudoers}" "NOPASSWD: /usr/local/sbin/piccie-restart-engine"
+  assert_not_contains "${updater_sudoers}" "piccie-update"
+}
+
 run_test() {
   local name="$1"
   "$name"
@@ -413,7 +488,9 @@ run_test() {
 run_test test_partition_growth_requests_one_reboot
 run_test test_second_boot_grows_and_verifies_ext4
 run_test test_full_device_is_idempotent
+run_test test_qemu_smoke_skips_emulated_fsck
 run_test test_one_ext4_block_short_is_grown
+run_test test_missing_data_device_times_out_without_changes
 run_test test_wrong_partition_number_fails_without_changes
 run_test test_nonfinal_partition_fails_without_changes
 run_test test_unexpected_filesystem_label_fails_without_changes
@@ -426,8 +503,9 @@ run_test test_failure_is_recorded_for_fallback_gate
 run_test test_success_clears_stale_failure_marker
 run_test test_filesystem_resize_must_verify
 run_test test_systemd_ordering_keeps_growth_offline
-run_test test_provisioning_triggers_one_time_lockdown
+run_test test_root_is_readonly_without_runtime_boot_mutation
 run_test test_safe_shutdown_uses_narrow_privileged_helper
 run_test test_r2_boot_file_is_imported_before_engine_start
+run_test test_recovery_and_release_contracts_are_baked_into_image
 
 echo "PASS: ${PASS_COUNT} piccie-grow-data tests"

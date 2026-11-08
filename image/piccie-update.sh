@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 # Install a code-only release from /data/app/incoming and roll back on failure.
 set -euo pipefail
+export PATH=/usr/bin:/bin
+
+[[ "$(id -u)" -ne 0 ]] || {
+  echo "piccie-update must run as the unprivileged pi user" >&2
+  exit 2
+}
 
 ARCHIVE="${1:-}"
 APP_DIR=/data/app
@@ -31,6 +37,9 @@ archive, destination = sys.argv[1:]
 root = pathlib.Path(destination).resolve()
 with tarfile.open(archive, "r:gz") as bundle:
     for member in bundle.getmembers():
+        parts = pathlib.PurePosixPath(member.name).parts
+        if "__MACOSX" in parts or any(part.startswith("._") for part in parts):
+            raise SystemExit(f"unsupported macOS metadata entry: {member.name}")
         target = (root / member.name).resolve()
         if root not in target.parents and target != root:
             raise SystemExit(f"unsafe archive path: {member.name}")
@@ -62,7 +71,7 @@ PREVIOUS="$(readlink -f "${CURRENT}")"
 rm -f -- "${APP_DIR}/current.next"
 ln -s "${DEST}" "${APP_DIR}/current.next"
 mv -Tf "${APP_DIR}/current.next" "${CURRENT}"
-systemctl restart piccie-engine.service
+sudo -n /usr/local/sbin/piccie-restart-engine
 
 HEALTHY=false
 for _ in $(seq 1 30); do
@@ -78,7 +87,7 @@ if [[ "${HEALTHY}" != true ]]; then
   rm -f -- "${APP_DIR}/current.next"
   ln -s "${PREVIOUS}" "${APP_DIR}/current.next"
   mv -Tf "${APP_DIR}/current.next" "${CURRENT}"
-  systemctl restart piccie-engine.service
+  sudo -n /usr/local/sbin/piccie-restart-engine
   exit 4
 fi
 

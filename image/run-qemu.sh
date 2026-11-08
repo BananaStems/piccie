@@ -20,6 +20,8 @@ HEADLESS="${PICCIE_QEMU_HEADLESS:-0}"
 BACKGROUND="${PICCIE_QEMU_BACKGROUND:-0}"
 REUSE_IMAGE="${PICCIE_QEMU_REUSE_IMAGE:-0}"
 EXTRA_SIZE="${PICCIE_QEMU_EXTRA_SIZE:-2147483648}"
+NETWORK="${PICCIE_QEMU_NETWORK:-1}"
+ACCEL="${PICCIE_QEMU_ACCEL:-}"
 
 if [[ ! -f "${IMG}" ]]; then
   echo "Image not found: ${IMG}" >&2
@@ -63,14 +65,17 @@ PY
   ROOT_DEV="/dev/mmcblk1p2"
   # Do not pass boot/initramfs8 — it is modules-only and breaks handoff to systemd.
   # systemd.firstboot=off avoids repeated reboots from first-boot wizard on resized images.
-  APPEND="earlycon=pl011,mmio32,0xfe201000 console=ttyAMA0,115200 root=${ROOT_DEV} rw rootwait rootfstype=ext4 piccie.qemu=1 dwc_otg.fiq_fsm_enable=0 systemd.firstboot=off systemd.condition_first_boot=0 nowatchdog systemd.watchdog=0 systemd.unit=multi-user.target systemd.mask=lightdm.service systemd.mask=systemd-growfs-root.service systemd.mask=rpi-resize-swap-file.service"
+  # QEMU's headless Raspberry Pi model can stall while Plymouth probes its
+  # emulated framebuffer. The physical appliance still uses Plymouth; only the
+  # serial smoke boot masks graphical startup that cannot be validated here.
+  APPEND="earlycon=pl011,mmio32,0xfe201000 console=ttyAMA0,115200 root=${ROOT_DEV} ro rootwait rootfstype=ext4 piccie.qemu=1 dwc_otg.fiq_fsm_enable=0 systemd.firstboot=off systemd.condition_first_boot=0 systemd.log_target=kmsg systemd.journald.forward_to_console=1 nowatchdog systemd.watchdog=0 systemd.unit=multi-user.target systemd.mask=lightdm.service systemd.mask=plymouth-start.service systemd.mask=plymouth-read-write.service systemd.mask=plymouth-quit-wait.service systemd.mask=systemd-remount-fs.service systemd.mask=systemd-growfs-root.service systemd.mask=rpi-resize-swap-file.service"
 else
   DTB="${BOOT_DIR}/bcm2710-rpi-3-b-plus.dtb"
   CPU="cortex-a53"
   MACHINE="raspi3b"
   MEMORY="1G"
   ROOT_DEV="/dev/mmcblk0p2"
-  APPEND="console=ttyAMA0,115200 root=${ROOT_DEV} rw rootwait rootfstype=ext4 piccie.qemu=1"
+  APPEND="console=ttyAMA0,115200 root=${ROOT_DEV} ro rootwait rootfstype=ext4 piccie.qemu=1 systemd.log_target=kmsg systemd.journald.forward_to_console=1"
   echo "Warning: Pi 4 DTB not found — falling back to Pi 3B (may hang on splash)." >&2
 fi
 
@@ -78,17 +83,31 @@ QEMU_IMG="${REPO_ROOT}/.pi-gen/deploy/piccie-qemu.img"
 mkdir -p "$(dirname "${QEMU_IMG}")"
 if [[ "${PICCIE_QEMU_FRESH:-0}" == "1" || ! -f "${QEMU_IMG}" \
     || ( "${REUSE_IMAGE}" != "1" && "${IMG}" -nt "${QEMU_IMG}" ) ]]; then
-  cp "${IMG}" "${QEMU_IMG}"
+  rm -f "${QEMU_IMG}"
+  # Keep the release image immutable. Prefer a filesystem-level clone so QEMU's
+  # Raspberry Pi SD controller sees a plain raw card while only changed blocks
+  # consume extra disk space.
+  if cp -c "${IMG}" "${QEMU_IMG}" 2>/dev/null; then
+    :
+  else
+    rm -f "${QEMU_IMG}"
+    if cp --reflink=auto --sparse=always "${IMG}" "${QEMU_IMG}" 2>/dev/null; then
+      :
+    else
+      rm -f "${QEMU_IMG}"
+      cp "${IMG}" "${QEMU_IMG}"
+    fi
+  fi
 fi
-SOURCE_IMG_SIZE="$(qemu-img info --output=json "${IMG}" | python3 -c 'import json, sys; print(json.load(sys.stdin)["virtual-size"])')"
-QEMU_IMG_SIZE="$(qemu-img info --output=json "${QEMU_IMG}" | python3 -c 'import json, sys; print(json.load(sys.stdin)["virtual-size"])')"
+SOURCE_IMG_SIZE="$(wc -c <"${IMG}" | tr -d '[:space:]')"
+QEMU_IMG_SIZE="$(wc -c <"${QEMU_IMG}" | tr -d '[:space:]')"
 [[ "${EXTRA_SIZE}" =~ ^[0-9]+$ ]] || {
   echo "PICCIE_QEMU_EXTRA_SIZE must be a byte count." >&2
   exit 1
 }
 QEMU_TARGET_SIZE=$((SOURCE_IMG_SIZE + EXTRA_SIZE))
 if (( QEMU_IMG_SIZE < QEMU_TARGET_SIZE )); then
-  qemu-img resize -f raw "${QEMU_IMG}" "${QEMU_TARGET_SIZE}" >/dev/null
+  truncate -s "${QEMU_TARGET_SIZE}" "${QEMU_IMG}"
 fi
 
 DISPLAY_ARGS=(-display cocoa)
@@ -98,8 +117,12 @@ fi
 
 echo ""
 echo "Starting QEMU (${MACHINE}, root=${ROOT_DEV})..."
-echo "  SSH:      key-only on port ${SSH_PORT} (if a key was installed in the image)"
-echo "  Booth UI: http://localhost:${HTTP_PORT}  (first boot is slow — 5–15 min on Mac)"
+if [[ "${NETWORK}" == "1" ]]; then
+  echo "  SSH:      key-only on port ${SSH_PORT} (if a key was installed in the image)"
+  echo "  Booth UI: http://localhost:${HTTP_PORT}  (first boot is slow — 5–15 min on Mac)"
+else
+  echo "  Network:  disabled (serial boot validation)"
+fi
 echo "  Stop:     Ctrl+A then X  (or close the window)"
 echo ""
 
@@ -112,12 +135,19 @@ QEMU_ARGS=(
   -dtb "${DTB}"
   -drive "file=${QEMU_IMG},format=raw,if=sd"
   -append "${APPEND}"
-  -usb
-  -netdev "user,id=net0,hostfwd=tcp:127.0.0.1:${SSH_PORT}-:22,hostfwd=tcp:127.0.0.1:${HTTP_PORT}-:8080"
-  -device usb-net,netdev=net0
   "${DISPLAY_ARGS[@]}"
   -serial mon:stdio
 )
+if [[ -n "${ACCEL}" ]]; then
+  QEMU_ARGS=(-accel "${ACCEL}" "${QEMU_ARGS[@]}")
+fi
+if [[ "${NETWORK}" == "1" ]]; then
+  QEMU_ARGS+=(
+    -usb
+    -netdev "user,id=net0,hostfwd=tcp:127.0.0.1:${SSH_PORT}-:22,hostfwd=tcp:127.0.0.1:${HTTP_PORT}-:8080"
+    -device usb-net,netdev=net0
+  )
+fi
 
 if [[ "${BACKGROUND}" == "1" ]]; then
   qemu-system-aarch64 "${QEMU_ARGS[@]}" &

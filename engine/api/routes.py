@@ -2,19 +2,24 @@ from __future__ import annotations
 
 import asyncio
 import io
+import logging
 import os
 import secrets
 import socket
 import tempfile
 import threading
 import zipfile
+from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, Response, StreamingResponse
 
+from engine.atomicio import jpeg_is_intact
 from engine.api.schemas import (
     ActiveEventRequest,
+    AdminPinUpdateRequest,
     AdminUnlockRequest,
     CaptureResponse,
     EventRequest,
@@ -24,21 +29,23 @@ from engine.api.schemas import (
     PerformanceSettingsRequest,
     SessionResponse,
     StatusResponse,
+    SshAuthorizedKeyRequest,
     TemplateResponse,
     WifiConnectRequest,
     WifiNetworkResponse,
 )
-from engine.atomicio import jpeg_is_intact
 from engine.camera import appliance_qemu
 from engine.camera_settings import CAMERA_SETTING_OPTIONS
+from engine.capture_delivery import CaptureDeliveryError
 from engine.composer import (
     _layout_metrics,
-    compose_strip,
+    photo_thumbnail,
+    render_filtered_photo_preview_jpeg,
     render_strip_preview_jpeg,
     strip_dimensions,
 )
 from engine.config import AppConfig, ConfigStore
-from engine.paths import r2_session_target, slugify
+from engine.paths import r2_named_strip_stem
 from engine.performance import (
     DEVICE_OPTIONS,
     apply_performance_profile,
@@ -48,15 +55,40 @@ from engine.performance import (
 )
 from engine.power import schedule_poweroff
 from engine.provisioning import provision_booth
-from engine.r2 import R2Uploader
+from engine.r2 import R2Uploader, signed_url_expiring
 from engine.storage import data_degraded, disk_free_mb, disk_low
+from engine.ssh_access import read_authorized_key, set_authorized_key
 from engine.template_packages import GOOGLE_FONTS, install_template
 from engine.templates import TemplateRegistry
-from engine.upload_queue import UploadJob
 from engine.version import APP_VERSION, BUILD_ID
 from engine.wifi import connect_network, current_ssid, list_networks
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api")
+STUDIO_LINK_INACTIVE = "This Studio link is no longer active. Create a new one on the booth."
+# A publish can upload for minutes. Held by publish, disable, clear and delete,
+# so a kiosk retry cannot mint a second link, and a publish that finishes later
+# cannot revive a gallery the organiser just cleared, deleted or disabled.
+_publish_lock = threading.Lock()
+# What the one running gallery publish has done so far, for the kiosk's progress bar.
+_publish_progress: dict = {}
+
+
+@contextmanager
+def _gallery_guard():
+    if not _publish_lock.acquire(blocking=False):
+        raise HTTPException(409, "The event gallery is still being prepared. Try again in a minute.")
+    try:
+        yield
+    finally:
+        _publish_lock.release()
+
+
+def _capture_call(operation, *args):
+    try:
+        return operation(*args)
+    except CaptureDeliveryError as exc:
+        raise HTTPException(exc.status_code, exc.detail) from exc
 
 
 def _ready_config(request: Request) -> AppConfig:
@@ -78,7 +110,7 @@ def _require_studio(request: Request) -> None:
     token = request.headers.get("X-Studio-Token", "")
     pairings = getattr(request.app.state, "template_pairings", {})
     if not token or token not in pairings:
-        raise HTTPException(401, "This Studio link is no longer active. Create a new one on the booth.")
+        raise HTTPException(401, STUDIO_LINK_INACTIVE)
 
 
 def _onboarding_data_dir() -> Path:
@@ -118,13 +150,19 @@ def _complete_onboarding(request: Request, body: OnboardingCompleteRequest) -> d
                 "R2 settings were not found. Shut down Piccie and complete "
                 "piccie-r2.txt on the microSD boot partition.",
             )
+        check_cloud = getattr(request.app.state.upload_queue, "check_cloud_health", None)
+        reachable, cloud_error = (
+            check_cloud() if check_cloud else (False, "Cloud readiness check unavailable.")
+        )
+        if not reachable:
+            raise HTTPException(400, cloud_error or "Could not connect to R2.")
         payload = body.model_dump(mode="json")
         payload["wifi_ssid"] = ssid
         try:
             provision_booth(payload, data_dir=data_dir, store=store)
         except Exception as exc:
             raise HTTPException(400, str(exc) or "Could not connect to R2.") from exc
-    return {"ok": True, "restarting": True}
+    return {"ok": True, "restarting": False}
 
 
 @router.get("/status", response_model=StatusResponse)
@@ -190,6 +228,36 @@ def set_active_event(request: Request, body: ActiveEventRequest) -> dict:
     return {"ok": True, "event_id": body.event_id}
 
 
+@router.get("/settings/access")
+def get_access_settings(request: Request) -> dict:
+    _require_admin(request)
+    key = read_authorized_key()
+    return {
+        "admin_pin_set": request.app.state.config_store.ensure().admin_pin_set,
+        "ssh_authorized_key": key,
+        "ssh_key_configured": bool(key),
+    }
+
+
+@router.put("/settings/access/pin")
+def update_admin_pin(request: Request, body: AdminPinUpdateRequest) -> dict:
+    _require_admin(request)
+    request.app.state.config_store.set_admin_pin(body.pin)
+    token = secrets.token_urlsafe(32)
+    request.app.state.admin_tokens.clear()
+    request.app.state.admin_tokens.add(token)
+    return {"ok": True, "token": token}
+
+
+@router.put("/settings/access/ssh")
+def update_ssh_authorized_key(
+    request: Request, body: SshAuthorizedKeyRequest
+) -> dict:
+    _require_admin(request)
+    key = set_authorized_key(body.ssh_authorized_key)
+    return {"ok": True, "ssh_key_configured": bool(key)}
+
+
 @router.get("/wifi/networks", response_model=list[WifiNetworkResponse])
 def wifi_networks() -> list[WifiNetworkResponse]:
     return [
@@ -209,8 +277,13 @@ def wifi_connect(request: Request, body: WifiConnectRequest) -> dict:
     config.wifi_ssid = result.ssid
     store.save(config)
     check_cloud = getattr(request.app.state.upload_queue, "check_cloud_health", None)
+    onboarding_will_probe = (
+        os.environ.get("PICCIE_ONBOARDING") == "1" and _onboarding_pending()
+    )
     reachable, cloud_error = (
-        check_cloud() if check_cloud and config.r2 else (None, None)
+        check_cloud()
+        if check_cloud and config.r2 and not onboarding_will_probe
+        else (None, None)
     )
     return {
         "ok": True,
@@ -442,18 +515,39 @@ def _event_archive(request: Request, event_id: str) -> Path:
     storage = request.app.state.storage
     event = storage.get_event(event_id)
     assert event is not None
-    sessions = sorted(storage.list_event_sessions(event_id), key=lambda item: item.created_at)
-    strips = [Path(session.local_path) / "strip.jpg" for session in sessions]
-    strips = [strip for strip in strips if jpeg_is_intact(strip)]
-    if not strips:
+    sessions = sorted(
+        storage.list_event_sessions(event_id),
+        key=lambda item: item.strip_number,
+    )
+    completed = [
+        session
+        for session in sessions
+        if jpeg_is_intact(Path(session.local_path) / "strip.jpg")
+    ]
+    if not completed:
         raise HTTPException(400, "This event has no completed photo strips.")
     archive = storage.events_dir / event_id / "download-all.zip"
     temporary = archive.with_suffix(".zip.new")
     try:
         with zipfile.ZipFile(temporary, "w", compression=zipfile.ZIP_STORED, allowZip64=True) as bundle:
-            stem = slugify(event.name, max_len=40)
-            for index, strip in enumerate(strips, 1):
-                bundle.write(strip, arcname=f"{stem}-strip-{index:03d}.jpg")
+            _publish_progress.update(total=len(completed))
+            for packed, session in enumerate(completed):
+                _publish_progress["done"] = packed
+                session_dir = Path(session.local_path)
+                stem = r2_named_strip_stem(event.name, session.strip_number)
+                bundle.write(
+                    session_dir / "strip.jpg",
+                    arcname=f"strips/{stem}.jpg",
+                )
+                for photo_index in range(1, 4):
+                    photo = session_dir / f"photo-{photo_index}.jpg"
+                    if jpeg_is_intact(photo):
+                        bundle.write(
+                            photo,
+                            arcname=(
+                                f"photos/{stem}-photo-{photo_index:02d}.jpg"
+                            ),
+                        )
         temporary.replace(archive)
     finally:
         temporary.unlink(missing_ok=True)
@@ -462,28 +556,49 @@ def _event_archive(request: Request, event_id: str) -> Path:
 
 def _publish_event(request: Request, event_id: str, regenerate: bool) -> EventShareResponse:
     _require_admin(request)
-    storage = request.app.state.storage
-    event = storage.get_event(event_id)
-    if not event:
-        raise HTTPException(404, "Event not found")
-    if event.share_url and not regenerate:
-        return EventShareResponse(enabled=True, url=event.share_url)
-    config = _ready_config(request)
-    if not config.r2:
-        raise HTTPException(400, "Cloud storage is not configured.")
-    archive = _event_archive(request, event_id)
-    try:
-        url, token = R2Uploader(config.r2).publish_event(
-            event.id,
-            event.name,
-            event.date,
-            archive,
-            previous_token=event.share_token if regenerate else None,
-        )
-    except Exception as exc:
-        raise HTTPException(502, "Could not publish the event gallery. Check Wi-Fi and try again.") from exc
-    storage.set_event_share(event.id, url, token)
-    return EventShareResponse(enabled=True, url=url)
+    with _gallery_guard():
+        storage = request.app.state.storage
+        event = storage.get_event(event_id)
+        if not event:
+            raise HTTPException(404, "Event not found")
+        # Signed links last 7 days; rebuild a gallery about to expire instead of
+        # showing a dead link as ready.
+        if event.share_url and not regenerate and not signed_url_expiring(event.share_url):
+            return EventShareResponse(enabled=True, url=event.share_url)
+        config = _ready_config(request)
+        if not config.r2:
+            raise HTTPException(400, "Cloud storage is not configured.")
+        _publish_progress.update(event_id=event.id, stage="packing", done=0, total=0)
+        try:
+            archive = _event_archive(request, event_id)
+            _publish_progress.update(stage="uploading", done=0, total=archive.stat().st_size)
+            counted = threading.Lock()
+
+            def uploaded(amount: int) -> None:
+                # boto3 reports from several upload threads at once.
+                with counted:
+                    _publish_progress["done"] += amount
+
+            try:
+                url, token = R2Uploader(config.r2).publish_event(
+                    event.id,
+                    event.name,
+                    event.date,
+                    archive,
+                    previous_token=event.share_token,
+                    event_folder=event.r2_folder,
+                    on_progress=uploaded,
+                )
+            except Exception as exc:
+                logger.exception("Publishing the gallery for event %s failed", event.id)
+                raise HTTPException(502, f"Could not publish the event gallery: {exc}") from exc
+            finally:
+                # Only needed for the upload; kept, it doubles the event's disk use.
+                archive.unlink(missing_ok=True)
+        finally:
+            _publish_progress.clear()
+        storage.set_event_share(event.id, url, token)
+        return EventShareResponse(enabled=True, url=url)
 
 
 @router.get("/events/{event_id}/share", response_model=EventShareResponse)
@@ -492,6 +607,12 @@ def event_share(request: Request, event_id: str) -> EventShareResponse:
     if not event:
         raise HTTPException(404, "Event not found")
     return EventShareResponse(enabled=bool(event.share_url), url=event.share_url)
+
+
+@router.get("/events/{event_id}/share/progress")
+def event_share_progress(event_id: str) -> dict:
+    progress = dict(_publish_progress)
+    return progress if progress.get("event_id") == event_id else {"stage": "idle"}
 
 
 @router.post("/events/{event_id}/share", response_model=EventShareResponse)
@@ -507,26 +628,29 @@ def regenerate_event_share(request: Request, event_id: str) -> EventShareRespons
 @router.delete("/events/{event_id}/share", response_model=EventShareResponse)
 def disable_event_share(request: Request, event_id: str) -> EventShareResponse:
     _require_admin(request)
-    storage = request.app.state.storage
-    event = storage.get_event(event_id)
-    if not event:
-        raise HTTPException(404, "Event not found")
-    if event.share_token:
-        config = _ready_config(request)
-        if not config.r2:
-            raise HTTPException(400, "Cloud storage is not configured.")
-        try:
-            R2Uploader(config.r2).disable_share(event.id, event.share_token)
-        except Exception as exc:
-            raise HTTPException(502, "Could not disable the gallery. Check Wi-Fi and try again.") from exc
-    storage.set_event_share(event.id, None, None)
+    with _gallery_guard():
+        storage = request.app.state.storage
+        event = storage.get_event(event_id)
+        if not event:
+            raise HTTPException(404, "Event not found")
+        if event.share_token:
+            config = _ready_config(request)
+            if not config.r2:
+                raise HTTPException(400, "Cloud storage is not configured.")
+            try:
+                R2Uploader(config.r2).disable_share(event.id, event.share_token)
+            except Exception as exc:
+                logger.exception("Disabling the gallery for event %s failed", event.id)
+                raise HTTPException(502, f"Could not disable the gallery: {exc}") from exc
+        storage.set_event_share(event.id, None, None)
     return EventShareResponse(enabled=False)
 
 
 @router.post("/events/{event_id}/clear-photos")
 def clear_event_photos(request: Request, event_id: str) -> dict:
     _require_admin(request)
-    ok, targets = request.app.state.storage.clear_event_photos(event_id)
+    with _gallery_guard():
+        ok, targets = request.app.state.storage.clear_event_photos(event_id)
     if not ok:
         raise HTTPException(404, "Event not found")
     if targets:
@@ -537,7 +661,8 @@ def clear_event_photos(request: Request, event_id: str) -> dict:
 @router.delete("/events/{event_id}")
 def delete_event(request: Request, event_id: str) -> dict:
     _require_admin(request)
-    ok, targets = request.app.state.storage.delete_event(event_id)
+    with _gallery_guard():
+        ok, targets = request.app.state.storage.delete_event(event_id)
     if not ok:
         raise HTTPException(404, "Event not found")
     if targets:
@@ -562,6 +687,10 @@ def _template_response(template) -> TemplateResponse:
         photo_height=metrics["slot_h"],
         custom=template.custom,
         archived=template.archived,
+        # Phone-made templates often share a name; when each was saved tells them apart.
+        created_at=datetime.fromtimestamp(
+            (template.path / "template.json").stat().st_mtime, timezone.utc
+        ).isoformat() if template.custom and template.path else None,
     )
 
 
@@ -625,8 +754,8 @@ def delete_template(request: Request, template_id: str) -> Response:
     registry: TemplateRegistry = request.app.state.templates
     try:
         template = registry.load(template_id)
-        if not template.custom or not template.archived:
-            raise ValueError("Only archived custom templates can be deleted")
+        if not template.custom:
+            raise ValueError("Built-in templates cannot be deleted")
         if request.app.state.storage.template_event_count(template.id):
             raise HTTPException(409, "This template is still used by an event and cannot be deleted")
         registry.remove(template_id)
@@ -680,30 +809,18 @@ def template_preview(
 
 @router.post("/events/{event_id}/sessions", response_model=SessionResponse)
 def start_session(request: Request, event_id: str) -> SessionResponse:
-    storage = request.app.state.storage
-    event = storage.get_event(event_id)
-    if not event:
-        raise HTTPException(404, "Event not found")
-    if event.is_concluded():
-        raise HTTPException(409, "This event has concluded. Edit its end time to launch it again.")
-    if not request.app.state.camera.available:
-        raise HTTPException(503, "Camera unavailable")
-    if data_degraded():
-        raise HTTPException(
-            503,
-            "Photo storage is degraded. Restart the booth and repair /data before taking photos.",
-        )
-    if disk_low():
-        raise HTTPException(
-            507,
-            f"Storage almost full ({disk_free_mb()} MB free). Delete old events to continue.",
-        )
-    session = storage.create_session(event_id)
+    session = _capture_call(request.app.state.capture_delivery.start, event_id)
     return _session_response(session)
 
 
 @router.get("/sessions/{session_id}/photos/{photo_index}")
-def get_session_photo(request: Request, session_id: str, photo_index: int):
+def get_session_photo(
+    request: Request,
+    session_id: str,
+    photo_index: int,
+    filtered: bool = False,
+    thumb: bool = False,
+):
     if photo_index not in (1, 2, 3):
         raise HTTPException(400, "photo_index must be 1, 2, or 3")
     session = request.app.state.storage.get_session(session_id)
@@ -712,30 +829,28 @@ def get_session_photo(request: Request, session_id: str, photo_index: int):
     path = Path(session.local_path) / f"photo-{photo_index}.jpg"
     if not path.exists():
         raise HTTPException(404, "Photo not found")
+    if filtered:
+        return Response(
+            content=render_filtered_photo_preview_jpeg(path),
+            media_type="image/jpeg",
+            headers={"Cache-Control": "no-store"},
+        )
+    if thumb:
+        # A session's captures never change, so the kiosk can keep the tile.
+        return FileResponse(
+            photo_thumbnail(path),
+            headers={"Cache-Control": "max-age=604800, immutable"},
+        )
     return FileResponse(path)
 
 
 @router.post("/sessions/{session_id}/capture/{photo_index}", response_model=CaptureResponse)
 def capture_photo(request: Request, session_id: str, photo_index: int) -> CaptureResponse:
-    if photo_index not in (1, 2, 3):
-        raise HTTPException(400, "photo_index must be 1, 2, or 3")
-    storage = request.app.state.storage
-    session = storage.get_session(session_id)
-    if not session:
-        raise HTTPException(404, "Session not found")
-    event = storage.get_event(session.event_id)
-    if not event:
-        raise HTTPException(404, "Event not found")
-    # Photo saved full-frame; the strip composer crops each photo to its slot,
-    # so cropping at capture time would only re-encode the frame a second time.
-    path = Path(session.local_path) / f"photo-{photo_index}.jpg"
-    try:
-        request.app.state.camera.capture_to_file(
-            path,
-            label=f"Photo {photo_index}",
-        )
-    except Exception as exc:
-        raise HTTPException(500, f"Capture failed: {exc}") from exc
+    _capture_call(
+        request.app.state.capture_delivery.capture,
+        session_id,
+        photo_index,
+    )
     return CaptureResponse(
         photo_index=photo_index,
         local_url=f"/api/sessions/{session_id}/photos/{photo_index}",
@@ -744,74 +859,11 @@ def capture_photo(request: Request, session_id: str, photo_index: int) -> Captur
 
 @router.post("/sessions/{session_id}/finalize", response_model=SessionResponse)
 def finalize_session(request: Request, session_id: str) -> SessionResponse:
-    storage = request.app.state.storage
-    # Serialize finalize: a touchscreen double-tap can fire this twice. Without
-    # the lock both calls compose the strip (heavy CPU burst x2) and double-
-    # increment photo_count, which would skew the strip count.
-    with request.app.state.finalize_lock:
-        session = storage.get_session(session_id)
-        if not session:
-            raise HTTPException(404, "Session not found")
-        event = storage.get_event(session.event_id)
-        if not event:
-            raise HTTPException(404, "Event not found")
-        session_dir = Path(session.local_path)
-        strip_path = session_dir / "strip.jpg"
-        # Idempotency: if this session already produced a strip, it was finalized
-        # already. Return it as-is (best-effort re-enqueue is deduped) instead of
-        # recomposing and re-counting.
-        if jpeg_is_intact(strip_path):
-            request.app.state.upload_queue.enqueue_best_effort(
-                UploadJob(
-                    session_id=session.id,
-                    event_id=event.id,
-                    session_dir=session_dir,
-                    cloud_target=storage.get_session_target(session.id),
-                )
-            )
-            return _session_response(session)
-
-        photos = [session_dir / f"photo-{i}.jpg" for i in range(1, 4)]
-        for photo in photos:
-            if not photo.exists():
-                raise HTTPException(400, f"Missing {photo.name}")
-        registry: TemplateRegistry = request.app.state.templates
-        template = registry.load(event.template_id)
-        compose_strip(
-            template,
-            photos,
-            event.strip_line1(),
-            event.line2,
-            event.date,
-            strip_path,
-            date_separator=event.date_separator,
-        )
-        storage.increment_event_photo_count(event.id)
-        event = storage.get_event(event.id) or event
-
-        cloud_target = r2_session_target(event.id, session.id)
-        storage.write_session_meta(
-            session,
-            {
-                "session_id": session.id,
-                "event_id": event.id,
-                "r2_target": cloud_target,
-                "upload_status": "pending",
-            },
-        )
-        # Never fail finalize on queue pressure: the local strip already works for
-        # the result screen, and the periodic rescan retries the upload.
-        request.app.state.upload_queue.enqueue_best_effort(
-            UploadJob(
-                session_id=session.id,
-                event_id=event.id,
-                session_dir=session_dir,
-                cloud_target=cloud_target,
-            )
-        )
-        session = storage.get_session(session_id)
-        assert session is not None
-        return _session_response(session)
+    session = _capture_call(
+        request.app.state.capture_delivery.finalize,
+        session_id,
+    )
+    return _session_response(session)
 
 
 @router.get("/sessions/{session_id}", response_model=SessionResponse)
@@ -820,6 +872,24 @@ def get_session(request: Request, session_id: str) -> SessionResponse:
     if not session:
         raise HTTPException(404, "Session not found")
     return _session_response(session)
+
+
+@router.delete("/sessions/{session_id}")
+def delete_session(request: Request, session_id: str) -> dict:
+    _require_admin(request)
+    storage = request.app.state.storage
+    session = storage.get_session(session_id)
+    if not session or not (Path(session.local_path) / "strip.jpg").exists():
+        raise HTTPException(404, "Photo strip not found")
+    with _gallery_guard():
+        event = storage.get_event(session.event_id)
+        share_disabled = bool(event and event.share_url)
+        ok, targets = storage.delete_session(session_id)
+    if not ok:
+        raise HTTPException(404, "Photo strip not found")
+    if targets:
+        request.app.state.upload_queue.retry_pending_deletions_async()
+    return {"ok": True, "share_disabled": share_disabled}
 
 
 @router.get("/events/{event_id}/sessions", response_model=list[SessionResponse])
@@ -857,6 +927,16 @@ def kiosk_heartbeat(request: Request) -> dict:
     return {"ok": True}
 
 
+@router.get("/kiosk/status")
+def kiosk_status(request: Request) -> dict:
+    watchdog = getattr(request.app.state, "kiosk_watchdog", None)
+    return {
+        "heartbeat_age_seconds": (
+            watchdog.heartbeat_age if watchdog is not None else None
+        )
+    }
+
+
 @router.get("/qr")
 def qr_code(data: str):
     """Render a QR PNG locally. The result screen used to hit api.qrserver.com,
@@ -865,8 +945,17 @@ def qr_code(data: str):
     if not data or len(data) > 2048:
         raise HTTPException(400, "Missing or oversized data")
     import qrcode
+    from qrcode.constants import ERROR_CORRECT_L
 
-    img = qrcode.make(data)
+    qr = qrcode.QRCode(
+        version=None,
+        error_correction=ERROR_CORRECT_L,
+        box_size=8,
+        border=4,
+    )
+    qr.add_data(data)
+    qr.make(fit=True)
+    img = qr.make_image(fill_color="black", back_color="white")
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     return Response(
@@ -949,6 +1038,10 @@ def _session_response(session) -> SessionResponse:
         upload_error=session.upload_error,
         upload_attempts=session.upload_attempts,
         r2_strip_url=session.r2_strip_url,
+        # Guests are normally on mobile data or venue Wi-Fi, not the booth's
+        # LAN. Encode the private, time-limited R2 page itself; the booth must
+        # never be part of the guest download path after the upload completes.
+        guest_qr_url=session.r2_strip_url,
         strip_local_url=strip_url,
         photo_local_urls=[
             f"/api/sessions/{session.id}/photos/{index}"

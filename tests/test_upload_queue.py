@@ -1,11 +1,11 @@
 import json
+import itertools
+import queue
 import threading
 from pathlib import Path
 
-import pytest
 from PIL import Image
 
-from engine import upload_queue as upload_queue_module
 from engine.config import ConfigStore
 from engine.storage import Storage
 from engine.upload_queue import UploadJob, UploadQueue
@@ -45,16 +45,23 @@ def test_delete_requested_during_upload_wins(tmp_path, monkeypatch):
 
     class RacingUploader:
         deleted = []
-        tokens = []
 
-        def upload_session(self, _session_dir, _event_id, _session_id, _event_name, _event_date, share_token=None):
-            self.tokens.append(share_token)
+        def upload_session(
+            self,
+            _session_dir,
+            _event_id,
+            _session_id,
+            *,
+            cloud_target=None,
+        ):
+            assert cloud_target == target
             ok, targets = storage.clear_event_photos(event.id)
             assert ok and targets == [
                 target,
-                f"event-content:{event.id}",
+                f"event-archive:{event.id}",
+                f"named-event-archive:{event.id}:{event.r2_folder}",
             ]
-            return "https://photos.example.com/s/token", share_token
+            return "https://photos.example.com/strip"
 
         def delete_target(self, value):
             self.deleted.append(value)
@@ -70,11 +77,14 @@ def test_delete_requested_during_upload_wins(tmp_path, monkeypatch):
     )
 
     assert uploader.deleted == [target]
-    assert storage.pending_r2_deletions() == [f"event-content:{event.id}"]
+    assert storage.pending_r2_deletions() == [
+        f"event-archive:{event.id}",
+        f"named-event-archive:{event.id}:{event.r2_folder}",
+    ]
     assert storage.get_session(session.id) is None
 
 
-def test_retry_reuses_share_token_persisted_before_upload(tmp_path, monkeypatch):
+def test_named_upload_never_publishes_without_all_original_photos(tmp_path, monkeypatch):
     local = tmp_path / "local.json"
     local.write_text(
         json.dumps(
@@ -94,72 +104,84 @@ def test_retry_reuses_share_token_persisted_before_upload(tmp_path, monkeypatch)
     storage = Storage(tmp_path / "piccie.db", tmp_path / "events")
     event = storage.create_event("Wedding", "2026-08-01", "classic")
     session = storage.create_session(event.id)
-    target = f"event-session:{event.id}:{session.id}"
-    storage.write_session_meta(session, {"r2_target": target})
     Image.new("RGB", (2, 2)).save(Path(session.local_path) / "strip.jpg")
-
-    class FlakyUploader:
-        tokens = []
-
-        def upload_session(
-            self,
-            _session_dir,
-            _event_id,
-            _session_id,
-            _event_name,
-            _event_date,
-            share_token=None,
-        ):
-            self.tokens.append(share_token)
-            if len(self.tokens) == 1:
-                raise RuntimeError("connection dropped after share write")
-            return f"https://photos.example.com/s/{share_token}", share_token
-
-        def verify_guest_download(self, _url, expected_path):
-            assert expected_path.read_bytes().endswith(b"\xff\xd9")
-
-    uploader = FlakyUploader()
+    target = (
+        f"named-event-session:{event.id}:{session.id}:"
+        f"{event.r2_folder}:wedding-strip-00001"
+    )
+    calls = []
+    uploader = type(
+        "UploaderStub",
+        (),
+        {"upload_session": lambda self, *args, **kwargs: calls.append((args, kwargs))},
+    )()
     upload_queue = UploadQueue.__new__(UploadQueue)
     upload_queue.storage = storage
     upload_queue.config_store = store
     upload_queue._get_uploader = lambda _config: uploader
-    upload_queue._cloud_lock = threading.Lock()
-    upload_queue._cloud_reachable = None
-    upload_queue._cloud_error = None
-    job = UploadJob(session.id, event.id, Path(session.local_path), target)
 
-    with pytest.raises(RuntimeError, match="connection dropped"):
-        upload_queue._process(job)
-    persisted_token = storage.get_session_meta(session)["share_token"]
+    upload_queue._process(
+        UploadJob(
+            session.id,
+            event.id,
+            Path(session.local_path),
+            cloud_target=target,
+        )
+    )
 
-    upload_queue._process(job)
+    assert calls == []
+    failed = storage.get_session(session.id)
+    assert failed.upload_status == "corrupt"
+    assert "photo-1.jpg" in failed.upload_error
 
-    assert uploader.tokens == [persisted_token, persisted_token]
-    assert storage.get_session(session.id).upload_status == "complete"
 
-
-def test_retry_failures_are_persisted_with_attempt_count(tmp_path, monkeypatch):
+def test_worker_persists_one_failure_without_immediate_retry_storm(tmp_path):
     storage = Storage(tmp_path / "piccie.db", tmp_path / "events")
     event = storage.create_event("Wedding", "2026-08-01", "classic")
     session = storage.create_session(event.id)
     upload_queue = UploadQueue.__new__(UploadQueue)
     upload_queue.storage = storage
-    upload_queue._stop_event = threading.Event()
-    upload_queue._process = lambda _job: (_ for _ in ()).throw(
-        RuntimeError("venue network dropped")
+    upload_queue._queue = queue.PriorityQueue()
+    upload_queue._queue.put(
+        (0, 0, UploadJob(session.id, event.id, Path(session.local_path)))
     )
-    monkeypatch.setattr(upload_queue_module, "MAX_RETRIES", 3)
-    monkeypatch.setattr(upload_queue_module, "RETRY_BASE_SECONDS", 0)
+    upload_queue._stop_event = threading.Event()
+    upload_queue._inflight_lock = threading.Lock()
+    upload_queue._inflight = {session.id}
+    upload_queue._inflight_events = {session.id: event.id}
+    upload_queue._cloud_lock = threading.Lock()
+    upload_queue._cloud_reachable = None
+    upload_queue._cloud_error = None
+    calls = []
 
-    with pytest.raises(RuntimeError, match="venue network dropped"):
-        upload_queue._process_with_retry(
-            UploadJob(session.id, event.id, Path(session.local_path))
-        )
+    def fail_once(_job):
+        calls.append(True)
+        upload_queue._stop_event.set()
+        raise RuntimeError("venue network dropped")
 
+    upload_queue._process = fail_once
+    upload_queue._worker()
+    assert len(calls) == 1
     failed = storage.get_session(session.id)
     assert failed.upload_status == "failed"
-    assert failed.upload_attempts == 3
+    assert failed.upload_attempts == 1
     assert failed.upload_error == "venue network dropped"
+
+
+def test_current_guest_job_precedes_historical_backlog():
+    upload_queue = UploadQueue.__new__(UploadQueue)
+    upload_queue._queue = queue.PriorityQueue()
+    upload_queue._sequence = itertools.count()
+    upload_queue._inflight = set()
+    upload_queue._inflight_events = {}
+    upload_queue._inflight_lock = threading.Lock()
+    old = UploadJob("old", "event", Path("/old"))
+    current = UploadJob("current", "event", Path("/current"))
+
+    upload_queue.enqueue(old, block=False, historical=True)
+    upload_queue.enqueue(current, block=False)
+
+    assert upload_queue._queue.get_nowait()[2].session_id == "current"
 
 
 def test_backlog_includes_database_pending_and_failed(tmp_path):
@@ -209,6 +231,45 @@ def test_cloud_health_fails_closed_then_recovers(tmp_path, monkeypatch):
     assert upload_queue.cloud_health == (True, None)
 
 
+def test_rescan_retries_failed_cloud_health_without_reboot():
+    upload_queue = UploadQueue.__new__(UploadQueue)
+    upload_queue._cloud_lock = threading.Lock()
+    upload_queue._cloud_reachable = False
+    upload_queue._cloud_error = "Wi-Fi was not ready"
+    calls = []
+
+    upload_queue.check_cloud_health = lambda: (
+        calls.append(("health", None)),
+        setattr(upload_queue, "_cloud_reachable", True),
+    )
+    upload_queue.resume_pending = lambda: calls.append(("uploads", None))
+    upload_queue.retry_pending_deletions = lambda: calls.append(("deletions", None))
+    upload_queue.storage = type(
+        "StorageStub",
+        (),
+        {"prune_abandoned_sessions": lambda self: calls.append(("prune", None))},
+    )()
+
+    # Exit after the successful retry reaches the normal 30-second cadence.
+    def stop_on_normal_cadence(seconds):
+        calls.append(("wait", seconds))
+        return seconds == 30
+
+    upload_queue._stop_event = type(
+        "StopStub", (), {"wait": staticmethod(stop_on_normal_cadence)}
+    )()
+    upload_queue._rescan_loop()
+
+    assert calls == [
+        ("wait", 5),
+        ("health", None),
+        ("uploads", None),
+        ("deletions", None),
+        ("prune", None),
+        ("wait", 30),
+    ]
+
+
 def test_event_deletions_wait_for_inflight_upload():
     upload_queue = UploadQueue.__new__(UploadQueue)
     upload_queue._inflight_lock = threading.Lock()
@@ -219,5 +280,6 @@ def test_event_deletions_wait_for_inflight_upload():
     )
     assert upload_queue._deletion_conflicts_with_upload("event-share:event-1:token")
     assert upload_queue._deletion_conflicts_with_upload("event-content:event-1")
+    assert upload_queue._deletion_conflicts_with_upload("event-archive:event-1")
     assert upload_queue._deletion_conflicts_with_upload("event:event-1")
     assert not upload_queue._deletion_conflicts_with_upload("event:event-2")

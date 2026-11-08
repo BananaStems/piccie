@@ -1,60 +1,48 @@
 #!/usr/bin/env bash
-# Boot 1 only: AFTER provisioning, enable the read-only root overlay (+ read-only
-# boot), then reboot. On boot 2+ the root fs is an immutable tmpfs overlay that
-# cannot corrupt on power-yank. All persistent writes go to the separate /data
-# partition.
+# Verify Piccie's root is read-only from the start of every boot.
 #
-# SAFETY:
-#  - Runs only once provisioning succeeded (/data/.provisioned) and only once
-#    (/data/.lockdown-done).
-#  - Kill switch: create /boot/firmware/piccie-no-readonly on the FAT
-#    partition (visible from a Mac) to keep root WRITABLE and skip lockdown.
-#  - If overlay enable fails, set -e aborts before reboot -> boot 1 stays
-#    writable and functional (not bricked); retried next boot.
-#  - RECOVERY if a bad overlay ever stops boot: on the Mac, edit cmdline.txt on
-#    the bootfs partition and delete the "boot=overlay" token.
+# No live booth ever regenerates an initramfs or asks raspi-config to mutate its
+# boot files. Root is mounted ro by the factory cmdline + fstab. Persistent
+# application state and NetworkManager profiles live on /data.
+#
+# Recovery: create piccie-no-readonly on the FAT boot partition. This service
+# will deliberately remount root rw early in boot.
 set -euo pipefail
 
-if [ -e /boot/firmware/piccie-no-readonly ]; then
-  echo "lockdown: kill switch present; leaving root writable."
-  touch /data/.lockdown-done 2>/dev/null || true
-  rm -f /data/.lockdown-requested
+BOOT_DIR="${PICCIE_BOOT_DIR:-/boot/firmware}"
+RUN_DIR="${PICCIE_RUN_DIR:-/run}"
+ROOT_MOUNT="${PICCIE_ROOT_MOUNT:-/}"
+FINDMNT="${PICCIE_FINDMNT:-findmnt}"
+MOUNT="${PICCIE_MOUNT:-mount}"
+
+if [[ -e "${BOOT_DIR}/piccie-no-readonly" ]]; then
+  echo "piccie-root: recovery marker present; remounting root writable."
+  "${MOUNT}" -o remount,rw "${ROOT_MOUNT}"
+  case ",$("${FINDMNT}" -no OPTIONS "${ROOT_MOUNT}" 2>/dev/null)," in
+    *,rw,*) touch "${RUN_DIR}/piccie.root-writable" ;;
+    *) echo "piccie-root: ERROR: root did not become writable." >&2; exit 1 ;;
+  esac
   exit 0
 fi
 
-[ -e /data/.provisioned ]   || { echo "lockdown: not provisioned yet; deferring."; exit 0; }
-[ -e /data/.lockdown-done ] && exit 0
-
-# NEVER lock down against a degraded /data. If the real partition failed to mount
-# and data-fallback swapped in a tmpfs, /data/.provisioned lives in RAM: enabling
-# the read-only root overlay now would leave the booth permanently amnesiac (root
-# frozen, /data volatile) with no way to re-provision. Bail until /data is real.
-if [ -e /data/.DEGRADED ] || ! mountpoint -q /data; then
-  echo "lockdown: /data degraded or not mounted; refusing to lock down."
-  rm -f /data/.lockdown-requested
-  exit 0
-fi
-case "$(findmnt -no FSTYPE /data 2>/dev/null)" in
-  ext4|ext3|btrfs|xfs) : ;;
+# The kernel command line and fstab both request ro. Enforce it here as well so
+# an accidental missing kernel token fails closed without relying on the
+# distribution's generic systemd-remount-fs service.
+case ",$("${FINDMNT}" -no OPTIONS "${ROOT_MOUNT}" 2>/dev/null)," in
+  *,ro,*) ;;
   *)
-    echo "lockdown: /data is not a real disk filesystem; refusing to lock down."
-    rm -f /data/.lockdown-requested
-    exit 0
+    echo "piccie-root: root was writable; enforcing read-only mode."
+    "${MOUNT}" -o remount,ro "${ROOT_MOUNT}"
     ;;
 esac
 
-# Stop the engine so its periodic /data writes cannot be torn by the reboot.
-systemctl stop piccie-engine.service 2>/dev/null || true
-sync
-
-# bootro first (edits fstab/cmdline while still writable), overlay last (freezes
-# fstab). Let raspi-config manage the initramfs (auto_initramfs=1 is already set;
-# hand-rolling update-initramfs would collide).
-raspi-config nonint do_bootro 0 || true     # 0 = enable boot read-only (if supported)
-raspi-config nonint do_overlayfs 0          # 0 = enable root overlay (critical)
-
-touch /data/.lockdown-done
-rm -f /data/.lockdown-requested
-sync
-systemctl disable piccie-lockdown.service piccie-lockdown.path || true
-systemctl reboot
+case ",$("${FINDMNT}" -no OPTIONS "${ROOT_MOUNT}" 2>/dev/null)," in
+  *,ro,*)
+    echo "piccie-root: read-only root verified."
+    touch "${RUN_DIR}/piccie.root-readonly"
+    ;;
+  *)
+    echo "piccie-root: ERROR: root did not become read-only." >&2
+    exit 1
+    ;;
+esac

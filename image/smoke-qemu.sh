@@ -5,9 +5,9 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TIMEOUT="${PICCIE_QEMU_TIMEOUT:-1200}"
 KEEP_RUNNING=0
-SKIP_BOOT=0
 LOG=""
 REBOOT_RESTARTED=0
+LAUNCH_PID=""
 
 cleanup() {
   if [[ -n "${LOG}" && -f "${LOG}" ]]; then
@@ -21,17 +21,19 @@ cleanup() {
 for arg in "$@"; do
   case "${arg}" in
     --keep-running) KEEP_RUNNING=1 ;;
-    --skip-boot) SKIP_BOOT=1 ;;
     -h|--help)
       cat <<'EOF'
-Usage: ./image/smoke-qemu.sh [--keep-running] [--skip-boot]
+Usage: ./image/smoke-qemu.sh [--keep-running]
 
 Boots a fresh copy of the Piccie image with 256 MiB of extra virtual-card space.
-Passes after p3/ext4 growth, the controlled reboot, and systemd startup.
-Does not wait for SSH or the booth API (too slow/unreliable on Mac TCG).
+Passes after p3/ext4 growth, the controlled reboot, systemd startup, and a
+successful startup of the real engine process.
+
+The smoke boot disables QEMU's usb-net device because current Raspberry Pi
+kernels cannot initialize that emulated NIC reliably. Physical Wi-Fi and the
+engine HTTP API are covered by their dedicated tests.
 
   --keep-running  Leave QEMU running after a successful boot check
-  --skip-boot       Check an already-running QEMU VM (reads its serial log only if found)
 
 Env:
   PICCIE_QEMU_TIMEOUT      Seconds to wait for boot (default: 1200)
@@ -50,11 +52,13 @@ trap cleanup EXIT
 
 boot_ok() {
   grep -qE "piccie-grow-data: (filesystem expansion verified|partition and ext4 filesystem already use the full device)" "${LOG}" 2>/dev/null \
-    && grep -q "Reached target multi-user.target" "${LOG}" 2>/dev/null
+    && grep -q "Reached target local-fs.target" "${LOG}" 2>/dev/null \
+    && grep -q "Reached target multi-user.target" "${LOG}" 2>/dev/null \
+    && grep -q "Application startup complete" "${LOG}" 2>/dev/null
 }
 
 boot_failed() {
-  grep -qE "Kernel panic|VFS: Cannot open root device|Unable to mount root|piccie-grow-data: ERROR:" "${LOG}" 2>/dev/null
+  grep -qE "Kernel panic|VFS: Cannot open root device|Unable to mount root|piccie-grow-data: ERROR:|Failed to mount |Dependency failed for local-fs.target|You are in emergency mode|Cannot open access to console" "${LOG}" 2>/dev/null
 }
 
 reboot_loop() {
@@ -66,28 +70,20 @@ reboot_loop() {
 
 restart_after_qemu_reboot() {
   [[ "${REBOOT_RESTARTED}" -eq 0 ]] \
-    && grep -q "Reboot failed -- System halted" "${LOG}" 2>/dev/null
+    && grep -qE "Reboot failed -- System halted|reboot: Restarting system" "${LOG}" 2>/dev/null
 }
 
-if [[ "${SKIP_BOOT}" -eq 0 ]]; then
-  pkill -f "qemu-system-aarch64.*piccie-qemu" 2>/dev/null || true
-  sleep 2
-  LOG="$(mktemp)"
-  echo "Starting QEMU (data-growth boot check, timeout ${TIMEOUT}s)..."
+pkill -f "qemu-system-aarch64.*piccie-qemu" 2>/dev/null || true
+sleep 2
+LOG="$(mktemp)"
+echo "Starting QEMU (data-growth boot check, timeout ${TIMEOUT}s)..."
   PICCIE_QEMU_FRESH="${PICCIE_QEMU_FRESH:-1}" \
-    PICCIE_QEMU_REUSE_IMAGE="${PICCIE_QEMU_REUSE_IMAGE:-0}" \
-    PICCIE_QEMU_EXTRA_SIZE="${PICCIE_QEMU_EXTRA_SIZE:-268435456}" \
-    PICCIE_QEMU_HEADLESS=1 PICCIE_QEMU_BACKGROUND=1 \
-    "${REPO_ROOT}/image/run-qemu.sh" >"${LOG}" 2>&1 &
-else
-  LOG="$(mktemp)"
-  echo "Checking already-running QEMU (timeout ${TIMEOUT}s)..."
-  if ! pgrep -f "qemu-system-aarch64.*piccie-qemu" >/dev/null; then
-    echo "No QEMU VM running. Start one with: ./image/run-qemu.sh" >&2
-    exit 1
-  fi
-  echo "(Serial log only available when smoke-qemu starts QEMU; checking ports as fallback.)" >&2
-fi
+  PICCIE_QEMU_REUSE_IMAGE="${PICCIE_QEMU_REUSE_IMAGE:-0}" \
+  PICCIE_QEMU_EXTRA_SIZE="${PICCIE_QEMU_EXTRA_SIZE:-268435456}" \
+  PICCIE_QEMU_NETWORK=0 PICCIE_QEMU_ACCEL=tcg,thread=single \
+  PICCIE_QEMU_HEADLESS=1 PICCIE_QEMU_BACKGROUND=1 \
+  "${REPO_ROOT}/image/run-qemu.sh" >"${LOG}" 2>&1 &
+LAUNCH_PID=$!
 
 deadline=$((SECONDS + TIMEOUT))
 while (( SECONDS < deadline )); do
@@ -106,13 +102,22 @@ while (( SECONDS < deadline )); do
       pkill -f "qemu-system-aarch64.*piccie-qemu" 2>/dev/null || true
       PICCIE_QEMU_FRESH=0 PICCIE_QEMU_REUSE_IMAGE=1 \
         PICCIE_QEMU_EXTRA_SIZE="${PICCIE_QEMU_EXTRA_SIZE:-268435456}" \
+        PICCIE_QEMU_NETWORK=0 PICCIE_QEMU_ACCEL=tcg,thread=single \
         PICCIE_QEMU_HEADLESS=1 PICCIE_QEMU_BACKGROUND=1 \
         "${REPO_ROOT}/image/run-qemu.sh" >>"${LOG}" 2>&1 &
+      LAUNCH_PID=$!
       REBOOT_RESTARTED=1
+    fi
+    if [[ -n "${LAUNCH_PID}" ]] \
+        && ! kill -0 "${LAUNCH_PID}" 2>/dev/null \
+        && ! pgrep -f "qemu-system-aarch64.*piccie-qemu" >/dev/null; then
+      echo "QEMU failed to start or exited unexpectedly. Last log lines:" >&2
+      tail -20 "${LOG}" >&2
+      exit 1
     fi
     if boot_ok; then
       echo ""
-      echo "Boot check passed — systemd started on Piccie."
+      echo "Boot check passed — data grew and the Piccie engine started."
       if [[ "${KEEP_RUNNING}" -eq 1 ]]; then
         trap - EXIT
         echo "QEMU left running. Stop with: pkill -f 'qemu-system-aarch64.*piccie-qemu'"

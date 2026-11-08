@@ -1,0 +1,4 @@
+# Same name as /lib/udev/rules.d/60-ondemand-governor.rules, so this replaces it.
+# The booth is mains-powered and actively cooled: run at full clock so capture,
+# compositing and the UI never wait for ondemand to ramp up from 600 MHz.
+KERNEL=="cpu*", SUBSYSTEM=="cpu", ATTR{cpufreq/scaling_governor}="performance"

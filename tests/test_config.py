@@ -42,7 +42,7 @@ def test_admin_pin_is_hashed_and_verifiable(store):
     assert "2468" not in store.path.read_text()
 
 
-@pytest.mark.parametrize("pin", ["123", "123456789", "12ab"])
+@pytest.mark.parametrize("pin", ["123", "12345", "123456789", "12ab"])
 def test_admin_pin_validation(store, pin):
     with pytest.raises(ValueError):
         store.set_admin_pin(pin)
@@ -66,3 +66,12 @@ def test_ensure_rebuilds_on_corrupt_json(store):
     store.path.write_text("{ this is not valid json")
     config = store.ensure()  # must not raise; rebuilds from local defaults
     assert config.active_event_id is None
+
+
+def test_corrupt_local_credentials_do_not_restart_loop_engine(store):
+    (store.path.parent / "local.json").write_text("{ torn credential file")
+
+    config = store.ensure()
+
+    assert config.r2 is None
+    assert store.load().r2 is None

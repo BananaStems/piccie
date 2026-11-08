@@ -16,14 +16,12 @@ from engine.camera_settings import CameraSettings
 
 logger = logging.getLogger(__name__)
 
-# Setting fields that only affect the strip/preview grade (never the camera).
+# Setting fields that only affect the strip/preview grade (never the camera),
+# so they must not re-arm libcamera controls.
 _FILTER_KEYS = {
     "filter_name",
     "filter_strength",
 }
-
-# Settings that never touch libcamera must not re-arm camera controls.
-_NON_CAMERA_KEYS = _FILTER_KEYS
 
 # Picamera2 accepts a numeric `wait` value in seconds. A stalled camera must
 # fail the supervised process instead of holding the shared camera lock forever.
@@ -148,7 +146,6 @@ class WebcamBackend:
 
         self._cv2 = cv2
         self._cap = _resolve_webcam(cv2)
-        self._preview_size = preview_size()
 
     def _read_rgb_image(self) -> Image.Image:
         ok, frame = self._cap.read()
@@ -162,11 +159,6 @@ class WebcamBackend:
         # preview chokepoint (_prepare_preview_jpeg), so saved stills stay as the
         # sensor captured them and match the strip.
         return Image.fromarray(frame)
-
-    def capture_preview_jpeg(self, enhance) -> bytes:
-        img = _fit_resize(self._read_rgb_image(), *self._preview_size)
-        img = enhance(img)
-        return _image_to_jpeg(img, preview_jpeg_quality())
 
     def capture_still_jpeg(self, enhance) -> bytes:
         img = enhance(self._read_rgb_image())
@@ -402,7 +394,7 @@ class CameraService:
         self._settings.merge(patch)
         if changed & _FILTER_KEYS:
             self._configure_filter()
-        camera_changed = changed - _NON_CAMERA_KEYS
+        camera_changed = changed - _FILTER_KEYS
         if camera_changed and self._picam is not None:
             with self._camera_lock:
                 self._picam.apply_settings(self._settings, changed=camera_changed)
@@ -512,35 +504,34 @@ class CameraService:
                     self._restart_for_camera_failure("preview stream stalled")
             time.sleep(self._preview_interval)
 
-    def get_preview_jpeg(self) -> bytes:
-        with self._frame_lock:
-            jpeg = self._latest_jpeg
-        if jpeg is not None:
-            return jpeg
-        with self._camera_lock:
-            jpeg = self._capture_preview_jpeg()
-        with self._frame_lock:
-            self._latest_jpeg = jpeg
-            self._latest_jpeg_ts = time.monotonic()
-        return jpeg
-
     def capture_preview_frame(self) -> bytes:
-        """Capture one fresh preview JPEG on demand. Used by the settings-screen
-        poller, which avoids a long-lived MJPEG <img> — that stream's decode
-        collides with the screen's slider/toggle repaints and wedges the Pi's
-        Chromium compositor (white screen)."""
+        """Wait for one newly produced preview JPEG. The settings screen uses
+        short requests instead of a long-lived MJPEG <img>, whose continuous
+        decode collides with slider repaints and can wedge Pi Chromium."""
         if not self._available:
             raise RuntimeError("Camera unavailable")
-        # Serve a recent frame instead of a fresh full-res make_image per poll —
-        # the on-demand capture is the expensive path on the Pi (full sensor-res
-        # copy + resize + encode) and the poller asks every ~130ms. A settings
-        # change drops _latest_jpeg, so a new grade/control still shows instantly.
-        with self._frame_lock:
-            if (
-                self._latest_jpeg is not None
-                and time.monotonic() - self._latest_jpeg_ts < 0.25
-            ):
-                return self._latest_jpeg
+
+        # Temporarily count this request as a viewer. That wakes the single
+        # preview producer and lets its configured FPS clock govern capture,
+        # avoiding a second direct camera capture racing the normal stream.
+        with self._frame_cond:
+            start_seq = self._frame_seq
+            self._viewers += 1
+            self._frame_cond.notify_all()
+            try:
+                self._frame_cond.wait_for(
+                    lambda: self._frame_seq != start_seq
+                    or self._stop_event.is_set(),
+                    timeout=max(0.5, self._preview_interval * 3),
+                )
+                jpeg = self._latest_jpeg
+            finally:
+                self._viewers = max(0, self._viewers - 1)
+                self._frame_cond.notify_all()
+        if jpeg is not None:
+            return jpeg
+
+        # Startup fallback if the producer has not delivered its first frame.
         with self._camera_lock:
             jpeg = self._capture_preview_jpeg()
         with self._frame_lock:

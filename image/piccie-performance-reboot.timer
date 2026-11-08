@@ -1,0 +1,7 @@
+[Unit]
+Description=Delayed restart after applying a Piccie performance profile
+
+[Timer]
+OnActiveSec=5s
+AccuracySec=1s
+Unit=piccie-performance-reboot.service

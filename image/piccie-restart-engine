@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Narrow privileged boundary for Pi-owned code releases.
+set -euo pipefail
+[[ "$(id -u)" -eq 0 ]] || { echo "piccie-restart-engine must run as root" >&2; exit 2; }
+[[ "$#" -eq 0 ]] || { echo "piccie-restart-engine takes no arguments" >&2; exit 2; }
+exec /usr/bin/systemctl restart piccie-engine.service

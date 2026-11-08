@@ -138,6 +138,7 @@ export function renderAdminScreen({
           state.galleryEvent = event;
           state.gallerySessions = await api.listEventSessions(event.id);
           state.selectedGallerySession = state.gallerySessions[0] || null;
+          state.galleryScrollTop = 0;
           state.view = "gallery";
         } else {
           await enterParty(event);
@@ -153,7 +154,8 @@ export function renderAdminScreen({
 
 function galleryQrMarkup(session, escapeHtml) {
   if (session?.r2_strip_url) {
-    return `<img class="qr-code" src="/api/qr?data=${encodeURIComponent(session.r2_strip_url)}" alt="QR code to download this photo strip" /><p>Scan to download</p>`;
+    const qrUrl = session.guest_qr_url || session.r2_strip_url;
+    return `<img class="qr-code" src="/api/qr?data=${encodeURIComponent(qrUrl)}" alt="QR code to download this photo strip" /><p>Scan to download</p>`;
   }
   if (session?.upload_status === "failed" || session?.upload_status === "corrupt") {
     return `<p class="error-text">Upload failed</p><p class="subtitle">${escapeHtml(session.upload_error || "Piccie will retry automatically.")}</p>`;
@@ -161,7 +163,7 @@ function galleryQrMarkup(session, escapeHtml) {
   return `<p class="subtitle">Upload pending</p>`;
 }
 
-export function renderGalleryScreen({ app, state, render, api, escapeHtml }) {
+export function renderGalleryScreen({ app, state, render, api, escapeHtml, showConfirm }) {
   const event = state.galleryEvent;
   if (!event) {
     state.view = "admin";
@@ -180,21 +182,32 @@ export function renderGalleryScreen({ app, state, render, api, escapeHtml }) {
         <div class="gallery-body">
           <div class="gallery-grid drag-scroll">
             ${sessions.map((session, index) => `<button class="gallery-thumb${session.id === selected?.id ? " selected" : ""}" type="button" data-session="${session.id}" aria-label="View photo strip ${sessions.length - index}" aria-pressed="${session.id === selected?.id}">
-              ${session.photo_local_urls.map((url, photoIndex) => `<img src="${url}" alt="Photo ${photoIndex + 1} from strip ${sessions.length - index}" draggable="false" />`).join("")}
-            </button>`).join("")}
+                ${session.photo_local_urls.map((url, photoIndex) => `<img src="${url}?thumb=1" alt="Photo ${photoIndex + 1} from strip ${sessions.length - index}" loading="lazy" decoding="async" draggable="false" />`).join("")}
+              </button>`).join("")}
           </div>
           <div class="gallery-detail">
-            <div class="gallery-strip-panel"><img src="${selected.strip_local_url}" alt="Selected photo strip" /></div>
+            <div class="gallery-strip-panel">
+              <img src="${selected.strip_local_url}" alt="Selected photo strip" />
+              <button class="gallery-delete" type="button" id="gallery-delete">Delete strip</button>
+            </div>
             <div class="gallery-qr-panel">${galleryQrMarkup(selected, escapeHtml)}</div>
           </div>
         </div>`}
       <nav class="bottom-bar" aria-label="Gallery actions">
         <button class="btn btn-secondary" type="button" id="gallery-back">Back</button>
-        <button class="btn" type="button" id="gallery-share" ${sessions.length ? "" : "disabled"}>Share event</button>
+        <button class="btn" type="button" id="gallery-share" ${sessions.length ? "" : "disabled"}>Download all event strips</button>
       </nav>
     </div>`;
 
+  const grid = app.querySelector(".gallery-grid");
+  // Any re-render (a delete, for one) keeps the operator's place in a long event.
+  if (grid) {
+    grid.scrollTop = state.galleryScrollTop || 0;
+    grid.addEventListener("scroll", () => { state.galleryScrollTop = grid.scrollTop; }, { passive: true });
+  }
+
   document.getElementById("gallery-back").onclick = () => {
+    state.galleryScrollTop = 0;
     state.galleryEvent = null;
     state.gallerySessions = [];
     state.selectedGallerySession = null;
@@ -203,22 +216,20 @@ export function renderGalleryScreen({ app, state, render, api, escapeHtml }) {
   };
   document.getElementById("gallery-share")?.addEventListener("click", async (event) => {
     const button = event.currentTarget;
-    if (state.galleryEvent.share_url) {
-      showEventShare(state.galleryEvent.share_url);
-      return;
-    }
     button.disabled = true;
     button.textContent = "Preparing…";
     try {
-      const share = await api.createEventShare(state.galleryEvent.id);
+      // The booth returns the live link at once, or rebuilds one near its 7-day expiry.
+      const share = await withShareProgress(() => api.createEventShare(state.galleryEvent.id));
       state.galleryEvent.share_url = share.url;
       const stored = state.events.find((item) => item.id === state.galleryEvent.id);
       if (stored) stored.share_url = share.url;
       showEventShare(share.url);
     } catch (error) {
-      button.disabled = false;
-      button.textContent = "Share event";
       showShareError(error.message);
+    } finally {
+      button.disabled = false;
+      button.textContent = "Download all event strips";
     }
   });
   app.querySelectorAll(".gallery-thumb").forEach((thumb) => {
@@ -233,17 +244,95 @@ export function renderGalleryScreen({ app, state, render, api, escapeHtml }) {
       app.querySelector(".gallery-qr-panel").innerHTML = galleryQrMarkup(next, escapeHtml);
     };
   });
+  const deleteButton = document.getElementById("gallery-delete");
+  if (deleteButton) {
+    deleteButton.onclick = async () => {
+      const sessionId = state.selectedGallerySession?.id;
+      const sessionIndex = sessions.findIndex((item) => item.id === sessionId);
+      if (sessionIndex < 0) return;
+      const shared = Boolean(state.galleryEvent.share_url);
+      const confirmed = await showConfirm({
+        title: "Delete this strip?",
+        message: shared
+          ? "This permanently removes the strip from Piccie and R2. The existing event gallery link will be disabled until you share the event again."
+          : "This permanently removes the strip from Piccie and R2. This cannot be undone.",
+        confirmLabel: "Delete strip",
+        danger: true,
+      });
+      if (!confirmed) return;
+      deleteButton.disabled = true;
+      deleteButton.textContent = "Deleting…";
+      try {
+        const result = await api.deleteSession(sessionId);
+        const remaining = sessions.filter((item) => item.id !== sessionId);
+        state.gallerySessions = remaining;
+        if (state.selectedGallerySession?.id === sessionId) {
+          state.selectedGallerySession = remaining[Math.min(sessionIndex, remaining.length - 1)] || null;
+        }
+        state.galleryEvent.photo_count = Math.max(0, state.galleryEvent.photo_count - 1);
+        if (result.share_disabled) state.galleryEvent.share_url = null;
+        const stored = state.events.find((item) => item.id === state.galleryEvent.id);
+        if (stored) {
+          stored.photo_count = state.galleryEvent.photo_count;
+          if (result.share_disabled) stored.share_url = null;
+        }
+        render();
+      } catch (error) {
+        deleteButton.disabled = false;
+        deleteButton.textContent = "Delete strip";
+        showGalleryError(error.message);
+      }
+    };
+  }
 
-  function showShareError(message) {
+  function showGalleryError(message, title = "Could not delete strip") {
     const overlay = document.createElement("div");
     overlay.className = "confirm-overlay";
     overlay.innerHTML = `<section class="confirm-panel" role="alertdialog" aria-modal="true">
-      <h2 class="confirm-title">Could not share event</h2>
+      <h2 class="confirm-title">${escapeHtml(title)}</h2>
       <p class="confirm-message">${escapeHtml(message)}</p>
       <div class="confirm-actions"><button class="btn" type="button">Done</button></div>
     </section>`;
     overlay.querySelector("button").onclick = () => overlay.remove();
     document.getElementById("booth-frame").appendChild(overlay);
+  }
+
+  function showShareError(message) {
+    showGalleryError(message, "Could not prepare download");
+  }
+
+  // Packing and uploading a big event takes minutes; poll the booth so the bar keeps moving.
+  async function withShareProgress(publish) {
+    const eventId = state.galleryEvent.id;
+    const overlay = document.createElement("div");
+    overlay.className = "confirm-overlay";
+    overlay.innerHTML = `<section class="confirm-panel" role="dialog" aria-modal="true" aria-labelledby="share-progress-title">
+      <h2 class="confirm-title" id="share-progress-title">Preparing download</h2>
+      <p class="confirm-message" id="share-progress-label">Starting…</p>
+      <div class="share-progress" role="progressbar" aria-labelledby="share-progress-label" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div></div></div>
+    </section>`;
+    document.getElementById("booth-frame").appendChild(overlay);
+    const label = overlay.querySelector("#share-progress-label");
+    const bar = overlay.querySelector(".share-progress");
+    const mb = (bytes) => (bytes / 1e6).toFixed(bytes < 1e7 ? 1 : 0);
+    const timer = setInterval(async () => {
+      const progress = await api.getEventShareProgress(eventId).catch(() => null);
+      if (!progress?.total) return;
+      const part = Math.min(1, progress.done / progress.total);
+      // Packing is quick local disk work; the upload is most of the wait.
+      const overall = progress.stage === "packing" ? part * 0.1 : 0.1 + part * 0.9;
+      bar.firstElementChild.style.transform = `scaleX(${overall})`;
+      bar.setAttribute("aria-valuenow", String(Math.round(overall * 100)));
+      label.textContent = progress.stage === "packing"
+        ? `Packing strip ${progress.done + 1} of ${progress.total}`
+        : `Uploading ${mb(progress.done)} of ${mb(progress.total)} MB`;
+    }, 1000);
+    try {
+      return await publish();
+    } finally {
+      clearInterval(timer);
+      overlay.remove();
+    }
   }
 
   function showEventShare(url) {
@@ -253,7 +342,7 @@ export function renderGalleryScreen({ app, state, render, api, escapeHtml }) {
       <div class="event-share-copy">
         <p class="setup-eyebrow">Event gallery</p>
         <h2 id="event-share-title">Ready to share</h2>
-        <p>Scan this code or copy the private link.</p>
+        <p>Scan this code to download every strip and original photo, or copy the private link.</p>
         <code id="event-share-url">${escapeHtml(url)}</code>
         <p class="event-share-status" id="event-share-status" role="status"></p>
       </div>
@@ -281,7 +370,7 @@ export function renderGalleryScreen({ app, state, render, api, escapeHtml }) {
       setBusy(true);
       status.textContent = "Creating a new link…";
       try {
-        const share = await api.regenerateEventShare(state.galleryEvent.id);
+        const share = await withShareProgress(() => api.regenerateEventShare(state.galleryEvent.id));
         state.galleryEvent.share_url = share.url;
         overlay.remove();
         showEventShare(share.url);
