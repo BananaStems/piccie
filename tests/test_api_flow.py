@@ -67,8 +67,8 @@ def test_operator_auth_event_and_capture_flow(client):
         "name": "Launch test",
         "line1": "SAM & ALEX",
         "line2": "WEDDING",
-        "date": "2026-08-01",
-        "ends_at": "2026-08-01T23:00:00",
+        "date": "2099-08-01",
+        "ends_at": "2099-08-01T23:00:00",
         "date_separator": "/",
         "template_id": "classic",
     }
@@ -82,7 +82,7 @@ def test_operator_auth_event_and_capture_flow(client):
     assert created.status_code == 200
     event = created.json()
     assert event["date_separator"] == "/"
-    assert event["ends_at"] == "2026-08-01T23:00:00"
+    assert event["ends_at"] == "2099-08-01T23:00:00"
     assert event["concluded"] is False
 
     active = test_client.put(
@@ -125,7 +125,7 @@ def test_concluded_event_cannot_launch_or_start_session(client):
 
 def test_degraded_storage_blocks_capture_session(client, monkeypatch):
     test_client, app = client
-    event = app.state.storage.create_event("Wedding", "2026-08-01", "classic")
+    event = app.state.storage.create_event("Wedding", "2099-08-01", "classic")
     monkeypatch.setattr("engine.api.routes.data_degraded", lambda: True)
 
     response = test_client.post(f"/api/events/{event.id}/sessions")
@@ -267,7 +267,7 @@ def test_phone_studio_pairs_installs_and_archives_template(client, monkeypatch):
     )
     assert installed.status_code == 200
     template_id = installed.json()["id"]
-    event = app.state.storage.create_event("Uses custom", "2026-08-01", template_id)
+    event = app.state.storage.create_event("Uses custom", "2099-08-01", template_id)
     archived = test_client.post(f"/api/templates/{template_id}/archive")
     assert archived.status_code == 200
     assert archived.json()["archived"] is True
@@ -366,7 +366,7 @@ def test_event_share_builds_archive_and_can_be_disabled(client, monkeypatch):
             "bucket": "photos",
         }
     }))
-    event = app.state.storage.create_event("Wedding", "2026-08-01", "classic")
+    event = app.state.storage.create_event("Wedding", "2099-08-01", "classic")
     session = app.state.storage.create_session(event.id)
     from PIL import Image
     Image.new("RGB", (2, 6)).save(Path(session.local_path) / "strip.jpg")
@@ -393,6 +393,7 @@ def test_event_share_builds_archive_and_can_be_disabled(client, monkeypatch):
     assert created.status_code == 200
     assert created.json()["enabled"] is True
     assert app.state.storage.get_event(event.id).share_token.endswith(".new-token")
+    assert not (app.state.storage.events_dir / event.id / "download-all.zip").exists()
 
     regenerated = test_client.post(f"/api/events/{event.id}/share/regenerate")
     assert regenerated.status_code == 200
@@ -401,3 +402,148 @@ def test_event_share_builds_archive_and_can_be_disabled(client, monkeypatch):
     disabled = test_client.delete(f"/api/events/{event.id}/share")
     assert disabled.json() == {"enabled": False, "url": None}
     assert app.state.storage.get_event(event.id).share_url is None
+
+
+def test_double_tap_finalize_returns_the_same_strip_and_counts_once(client):
+    test_client, app = client
+    event = app.state.storage.create_event("Wedding", "2099-08-01", "classic")
+    session_id = test_client.post(f"/api/events/{event.id}/sessions").json()["id"]
+    for index in (1, 2, 3):
+        assert test_client.post(f"/api/sessions/{session_id}/capture/{index}").status_code == 200
+
+    first = test_client.post(f"/api/sessions/{session_id}/finalize")
+    second = test_client.post(f"/api/sessions/{session_id}/finalize")
+
+    assert first.status_code == second.status_code == 200
+    assert second.json()["strip_local_url"] == first.json()["strip_local_url"]
+    assert app.state.storage.get_event(event.id).photo_count == 1
+
+
+def test_gallery_changes_wait_for_a_running_publish(client):
+    from engine.api import routes
+
+    test_client, app = client
+    event = app.state.storage.create_event("Wedding", "2099-08-01", "classic")
+    app.state.storage.create_session(event.id)
+    with routes._publish_lock:
+        assert test_client.post(f"/api/events/{event.id}/share").status_code == 409
+        assert test_client.delete(f"/api/events/{event.id}/share").status_code == 409
+        assert test_client.post(f"/api/events/{event.id}/clear-photos").status_code == 409
+        assert test_client.delete(f"/api/events/{event.id}").status_code == 409
+    assert len(app.state.storage.list_event_sessions(event.id)) == 1
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+def test_guest_link_near_expiry_is_signed_again_and_saved(client, legacy):
+    from engine.paths import r2_event_strip_key, r2_legacy_strip_key
+
+    test_client, app = client
+    storage = app.state.storage
+    event = storage.create_event("Wedding", "2099-08-01", "classic")
+    session = storage.create_session(event.id)
+    # Strips from 1.0.6 and earlier keep their old object name.
+    key = (r2_legacy_strip_key if legacy else r2_event_strip_key)(event.id, session.id)
+    stale = f"https://r2.example/{key}?X-Amz-Date=20200101T000000Z&X-Amz-Expires=604800"
+    storage.update_session_upload(session.id, "complete", stale)
+
+    class Signer:
+        def download_url(self, key):
+            return f"https://r2.example/{key}?fresh"
+
+    app.state.upload_queue.uploader = lambda _config: Signer()
+
+    url = test_client.get(f"/api/sessions/{session.id}").json()["r2_strip_url"]
+
+    assert url == f"https://r2.example/{key}?fresh"
+    assert storage.get_session(session.id).r2_strip_url == url
+
+
+def test_custom_domain_is_checked_before_it_is_saved(client, monkeypatch):
+    import engine.config as config_module
+
+    test_client, app = client
+    config_module.LOCAL_CONFIG_PATH.write_text(json.dumps({
+        "r2": {"account_id": "acct", "access_key": "key", "secret_key": "secret", "bucket": "photos"}
+    }))
+    checked = []
+
+    class FakeUploader:
+        def __init__(self, _config):
+            pass
+
+        def check_public_domain(self, domain):
+            checked.append(domain)
+            if domain == "wrong.example.com":
+                raise RuntimeError("wrong.example.com did not answer.")
+
+    monkeypatch.setattr("engine.api.routes.R2Uploader", FakeUploader)
+    put = lambda domain: test_client.put("/api/settings/guest-links", json={"domain": domain})
+
+    assert put("https://Get.Piccie.uk/").json() == {"domain": "get.piccie.uk"}
+    assert app.state.config_store.ensure().r2.public_domain == "get.piccie.uk"
+    assert put("not a domain").status_code == 400
+    failed = put("wrong.example.com")
+    assert failed.status_code == 400 and "did not answer" in failed.json()["detail"]
+    assert test_client.get("/api/settings/guest-links").json() == {"domain": "get.piccie.uk"}
+    assert put("").json() == {"domain": ""}
+    assert checked == ["get.piccie.uk", "wrong.example.com"]
+
+
+def test_share_link_near_expiry_is_rebuilt(client, monkeypatch):
+    import engine.config as config_module
+
+    test_client, app = client
+    config_module.LOCAL_CONFIG_PATH.write_text(json.dumps({
+        "r2": {"account_id": "acct", "access_key": "key", "secret_key": "secret", "bucket": "photos"}
+    }))
+    event = app.state.storage.create_event("Wedding", "2099-08-01", "classic")
+    session = app.state.storage.create_session(event.id)
+    from PIL import Image
+    Image.new("RGB", (2, 6)).save(Path(session.local_path) / "strip.jpg")
+    stale = "https://r2.example/g?X-Amz-Date=20200101T000000Z&X-Amz-Expires=604800"
+    app.state.storage.set_event_share(event.id, stale, f"{event.id}.old")
+
+    class FakeUploader:
+        previous = []
+
+        def __init__(self, _config):
+            pass
+
+        def publish_event(self, event_id, _name, _date, _archive, previous_token=None):
+            self.previous.append(previous_token)
+            return "https://gallery.example/fresh", f"{event_id}.fresh"
+
+    monkeypatch.setattr("engine.api.routes.R2Uploader", FakeUploader)
+
+    response = test_client.post(f"/api/events/{event.id}/share")
+
+    assert response.json()["url"] == "https://gallery.example/fresh"
+    assert FakeUploader.previous == [f"{event.id}.old"]
+
+
+def test_failed_publish_says_why(client, monkeypatch):
+    import engine.config as config_module
+
+    test_client, app = client
+    config_module.LOCAL_CONFIG_PATH.write_text(json.dumps({
+        "r2": {"account_id": "acct", "access_key": "key", "secret_key": "secret", "bucket": "photos"}
+    }))
+    event = app.state.storage.create_event("Wedding", "2099-08-01", "classic")
+    session = app.state.storage.create_session(event.id)
+    from PIL import Image
+    Image.new("RGB", (2, 6)).save(Path(session.local_path) / "strip.jpg")
+
+    class BrokenUploader:
+        def __init__(self, _config):
+            pass
+
+        def publish_event(self, *_args, **_kwargs):
+            raise RuntimeError("NotImplemented: CompleteMultipartUpload")
+
+    monkeypatch.setattr("engine.api.routes.R2Uploader", BrokenUploader)
+
+    response = test_client.post(f"/api/events/{event.id}/share")
+
+    assert response.status_code == 502
+    assert "NotImplemented: CompleteMultipartUpload" in response.json()["detail"]
+

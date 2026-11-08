@@ -10,7 +10,6 @@ from engine.composer import (
     apply_filter,
     compose_strip,
     configure_filter,
-    photo_slot_size,
     render_strip_image,
 )
 from engine.templates import TemplateRegistry
@@ -52,11 +51,19 @@ def test_strip_preview_has_placeholders():
     assert img.size == (600, 1800)
 
 
-def test_photo_slot_aspect_matches_strip_layout():
-    registry = TemplateRegistry()
-    template = registry.load("classic")
-    for index in range(3):
-        assert photo_slot_size(template, index) == (600, 400)
+def test_look_filter_tones_photos_but_not_template_branding():
+    template = TemplateRegistry().load("love")
+    photos = [Image.new("RGB", (1280, 720), (220, 40, 40)) for _ in range(3)]
+    clean = render_strip_image(template, "Sarah & James", "Forever", "2026-06-14", photos=photos)
+    configure_filter(name="mono", strength=1)
+    try:
+        mono = render_strip_image(template, "Sarah & James", "Forever", "2026-06-14", photos=photos)
+    finally:
+        configure_filter(name="clean", strength=1)
+    red, green, blue = mono.getpixel((300, 200))
+    assert red == green == blue
+    footer = (0, 1320, 600, 1800)
+    assert mono.crop(footer).tobytes() == clean.crop(footer).tobytes()
 
 
 def test_core_strip_layout_geometry():

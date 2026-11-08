@@ -20,7 +20,8 @@ Piccie is self-hosted. The booth stores its own data and uploads finished strips
 directly to a private bucket in your Cloudflare R2 account. After flashing the
 image, fill in the documented `piccie-r2.txt` file on the microSD boot drive.
 Piccie imports it once and creates seven-day signed guest links without a
-Worker, OAuth client, GitHub connection or public bucket.
+Worker, OAuth client, GitHub connection or public bucket. Connect your own
+domain to the bucket for shorter links and a simpler QR code.
 
 ## Get started
 

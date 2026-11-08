@@ -400,6 +400,7 @@ test_r2_boot_file_is_imported_before_engine_start() {
   assert_contains "${template}" "SECRET_ACCESS_KEY="
   assert_contains "${template}" "BUCKET_NAME=piccie-photos"
   assert_contains "${template}" "Object Read & Write"
+  assert_contains "${template}" "SSH_PUBLIC_KEY="
   assert_not_contains "${template}" "PUBLIC_URL="
 }
 

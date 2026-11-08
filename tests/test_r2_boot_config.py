@@ -129,3 +129,60 @@ def test_valid_boot_file_repairs_incomplete_legacy_config(tmp_path):
 def test_invalid_or_ambiguous_files_fail_closed(text, message):
     with pytest.raises(BootConfigError, match=message):
         validated_r2(parse_boot_config(text))
+
+
+def test_boot_file_ssh_key_is_added_once_and_keeps_existing_keys(tmp_path):
+    destination = tmp_path / "local.json"
+    status = tmp_path / "status.txt"
+    keys = tmp_path / "ssh" / "authorized_keys"
+    keys.parent.mkdir()
+    keys.write_text("ssh-ed25519 AAAAOLD laptop\n")
+    for _ in range(2):  # the same file put back on the card must not duplicate the key
+        source = tmp_path / "piccie-r2.txt"
+        source.write_text(VALID_TEXT + "SSH_PUBLIC_KEY=ssh-ed25519 AAAANEW mac\n")
+        assert import_boot_config(
+            source=source,
+            destination=destination,
+            status_path=status,
+            degraded_markers=(),
+            authorized_keys=keys,
+        )
+
+    assert keys.read_text() == "ssh-ed25519 AAAAOLD laptop\nssh-ed25519 AAAANEW mac\n"
+    assert keys.stat().st_mode & 0o777 == 0o600
+    assert "SSH key was added" in status.read_text()
+
+
+def test_bad_boot_file_ssh_key_imports_nothing(tmp_path):
+    source = tmp_path / "piccie-r2.txt"
+    destination = tmp_path / "local.json"
+    status = tmp_path / "status.txt"
+    keys = tmp_path / "ssh" / "authorized_keys"
+    source.write_text(VALID_TEXT + "SSH_PUBLIC_KEY=-----BEGIN OPENSSH PRIVATE KEY-----\n")
+
+    assert not import_boot_config(
+        source=source,
+        destination=destination,
+        status_path=status,
+        degraded_markers=(),
+        authorized_keys=keys,
+    )
+    assert source.exists()
+    assert not destination.exists()
+    assert not keys.exists()
+    assert "SSH_PUBLIC_KEY" in status.read_text()
+
+
+def test_blank_ssh_key_line_is_allowed(tmp_path):
+    source = tmp_path / "piccie-r2.txt"
+    keys = tmp_path / "ssh" / "authorized_keys"
+    source.write_text(VALID_TEXT + "SSH_PUBLIC_KEY=\n")
+
+    assert import_boot_config(
+        source=source,
+        destination=tmp_path / "local.json",
+        status_path=tmp_path / "status.txt",
+        degraded_markers=(),
+        authorized_keys=keys,
+    )
+    assert not keys.exists()

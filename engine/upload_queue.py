@@ -25,7 +25,6 @@ class UploadJob:
     session_id: str
     event_id: str
     session_dir: Path
-    cloud_target: str | None = None
 
 
 class UploadQueue:
@@ -34,7 +33,6 @@ class UploadQueue:
         self.config_store = config_store
         self._queue: queue.Queue[UploadJob | None] = queue.Queue(maxsize=MAX_QUEUE_SIZE)
         self._uploader: R2Uploader | None = None
-        self._uploader_key: tuple[str, ...] | None = None
         self._cloud_lock = threading.Lock()
         self._probe_lock = threading.Lock()
         self._cloud_reachable: bool | None = None
@@ -49,11 +47,6 @@ class UploadQueue:
         self._thread.start()
         self._rescan_thread = threading.Thread(target=self._rescan_loop, daemon=True)
         self._rescan_thread.start()
-
-    @property
-    def backlog(self) -> int:
-        summary = self.storage.upload_summary()
-        return summary["pending"] + summary["failed"]
 
     @property
     def cloud_health(self) -> tuple[bool | None, str | None]:
@@ -124,7 +117,7 @@ class UploadQueue:
         if not targets:
             return 0
         config = self.config_store.load()
-        uploader = self._get_uploader(config)
+        uploader = self.uploader(config)
         if uploader is None:
             logger.warning("R2 not configured; deferred deleting %s session(s)", len(targets))
             return 0
@@ -145,11 +138,11 @@ class UploadQueue:
         with self._inflight_lock:
             inflight = dict(self._inflight_events)
         if target.startswith("event-session:"):
-            _, _event_id, session_id = target.split(":", 2)
-            return session_id in inflight
-        if target.startswith(("event:", "event-content:", "event-share:")):
-            event_id = target.split(":", 2)[1]
-            return event_id in inflight.values()
+            return target.split(":", 2)[2] in inflight
+        # Only a whole-event delete also removes strips; gallery pages and zips
+        # never race a strip upload.
+        if target.startswith("event:"):
+            return target.split(":", 1)[1] in inflight.values()
         return False
 
     def resume_pending(self) -> int:
@@ -185,19 +178,11 @@ class UploadQueue:
             except Exception as exc:  # noqa: BLE001 - a rescan error must not kill the loop
                 logger.warning("Upload rescan failed: %s", exc)
 
-    def _get_uploader(self, config) -> R2Uploader | None:
+    def uploader(self, config) -> R2Uploader | None:
         if not config or not config.r2:
             return None
-        key = (
-            config.r2.account_id,
-            config.r2.access_key,
-            config.r2.secret_key,
-            config.r2.bucket,
-            config.r2.jurisdiction,
-        )
-        if self._uploader is None or self._uploader_key != key:
+        if self._uploader is None or self._uploader.config != config.r2:
             self._uploader = R2Uploader(config.r2)
-            self._uploader_key = key
         return self._uploader
 
     def _worker(self) -> None:
@@ -249,77 +234,40 @@ class UploadQueue:
         if last_exc:
             raise last_exc
 
-    def _resolve_target(self, job: UploadJob) -> str:
-        if job.cloud_target:
-            return job.cloud_target
-        stored = self.storage.get_session_target(job.session_id)
-        if stored:
-            return stored
-        return r2_session_target(job.event_id, job.session_id)
-
     def _process(self, job: UploadJob) -> None:
         config = self.config_store.load()
-        uploader = self._get_uploader(config)
+        uploader = self.uploader(config)
         if uploader is None:
             raise RuntimeError("Cloud photo delivery is not configured.")
         event = self.storage.get_event(job.event_id)
         if not event:
             raise RuntimeError("The event no longer exists.")
-        target = self._resolve_target(job)
+        target = r2_session_target(job.event_id, job.session_id)
         if self.storage.r2_deletion_pending(target):
             return
         # Never upload a strip truncated by a power yank — it would live on
         # R2 as a permanently-broken image behind the guest's QR code.
-        files = [job.session_dir / "strip.jpg"]
-        broken = [f.name for f in files if not jpeg_is_intact(f)]
-        if broken:
+        strip = job.session_dir / "strip.jpg"
+        if not jpeg_is_intact(strip):
             logger.error(
-                "Session %s has corrupt/missing file(s) %s; marking failed, not uploading",
+                "Session %s has a corrupt/missing strip.jpg; marking failed, not uploading",
                 job.session_id,
-                ", ".join(broken),
             )
             self.storage.update_session_upload(
                 job.session_id,
                 "corrupt",
-                error=f"Corrupt or missing upload file(s): {', '.join(broken)}",
+                error="Corrupt or missing upload file(s): strip.jpg",
             )
             return
         self.storage.update_session_upload(job.session_id, "uploading")
-        session = self.storage.get_session(job.session_id)
-        meta = self.storage.get_session_meta(session) if session else {}
-        share_token = meta.get("share_token")
-        if session and not share_token:
-            # Persist the token before the first network side effect so retries
-            # keep stable session metadata across a power loss.
-            share_token = R2Uploader.new_session_share_token(event.id, job.session_id)
-            meta = self.storage.merge_session_meta(
-                session,
-                {
-                    "session_id": job.session_id,
-                    "event_id": job.event_id,
-                    "r2_target": target,
-                    "share_token": share_token,
-                    "upload_status": "pending",
-                },
-            )
-        download_url, share_token = uploader.upload_session(
-            job.session_dir,
-            event.id,
-            job.session_id,
-            event.strip_line1(),
-            event.date,
-            share_token=meta.get("share_token"),
-        )
+        download_url = uploader.upload_session(job.session_dir, event.id, job.session_id)
         # Deletion may have been requested while the network upload was active.
         # Delete again after upload so the final cloud state is always empty.
         if self.storage.r2_deletion_pending(target):
             uploader.delete_target(target)
             self.storage.complete_r2_deletion(target)
             return
-        uploader.verify_guest_download(
-            download_url,
-            job.session_dir / "strip.jpg",
-        )
+        uploader.verify_guest_download(download_url, strip)
         # The guest-link verification itself can take several seconds. Repeat
         # the tombstone check so an admin deletion during that window still wins.
         if self.storage.r2_deletion_pending(target):
@@ -333,17 +281,6 @@ class UploadQueue:
             error=None,
         )
         self._set_cloud_health(True)
-        session = self.storage.get_session(job.session_id)
-        if session:
-            self.storage.merge_session_meta(
-                session,
-                {
-                    "r2_target": target,
-                    "download_url": download_url,
-                    "share_token": share_token,
-                    "upload_status": "complete",
-                },
-            )
         logger.info("Upload complete for session %s", job.session_id)
 
     def close(self, timeout: float = 10) -> None:

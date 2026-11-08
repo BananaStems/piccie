@@ -27,10 +27,9 @@ if ! ssh "${SSH_ARGS[@]}" "${HOST}" \
   cat >&2 <<EOF
 Could not open key-based SSH access to ${HOST}.
 
-A fresh Piccie image disables password login and installs your SSH key only
-when onboarding finishes. If no key was previously installed, this booth
-cannot receive an SSH update yet; finish setup locally once or reflash an image
-that includes the phone-pairing fix.
+Piccie disables password login. Add your public key on the SSH_PUBLIC_KEY line
+of piccie-r2.txt when you flash the card, or in the SSH key field during
+onboarding. A booth set up without a key needs one more reflash.
 EOF
   exit 2
 fi

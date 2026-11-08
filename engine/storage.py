@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import logging
 import os
 import shutil
@@ -10,8 +9,9 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from engine.atomicio import jpeg_is_intact, write_json_atomic
+from engine.atomicio import jpeg_is_intact
 from engine.config import DATA_DIR
+from engine.paths import r2_session_target
 
 logger = logging.getLogger(__name__)
 
@@ -392,18 +392,26 @@ class Storage:
 
     def clear_event_photos(self, event_id: str) -> tuple[bool, list[str]]:
         with self._connect() as conn:
-            row = conn.execute("SELECT id FROM events WHERE id = ?", (event_id,)).fetchone()
+            row = conn.execute("SELECT share_token FROM events WHERE id = ?", (event_id,)).fetchone()
             if not row:
                 return False, []
             session_rows = conn.execute(
-                "SELECT event_id, local_path FROM sessions WHERE event_id = ?",
+                "SELECT id, local_path FROM sessions WHERE event_id = ?",
                 (event_id,),
             ).fetchall()
-            targets = self._collect_r2_targets(session_rows)
-            targets.append(f"event-content:{event_id}")
+            # Tombstone each cleared session, never the whole sessions/ prefix:
+            # strips guests take after the clear must survive a deletion that is
+            # still waiting for Wi-Fi.
+            targets = [r2_session_target(event_id, r["id"]) for r in session_rows]
+            if row["share_token"]:
+                # The published gallery and its zip only held the cleared photos.
+                targets.append(f"event-share:{event_id}:{row['share_token']}")
             self._record_r2_deletions(conn, targets)
             conn.execute("DELETE FROM sessions WHERE event_id = ?", (event_id,))
-            conn.execute("UPDATE events SET photo_count = 0 WHERE id = ?", (event_id,))
+            conn.execute(
+                "UPDATE events SET photo_count = 0, share_url = NULL, share_token = NULL WHERE id = ?",
+                (event_id,),
+            )
         for session_row in session_rows:
             session_dir = Path(session_row["local_path"])
             if session_dir.exists():
@@ -419,10 +427,9 @@ class Storage:
             if not row:
                 return False, []
             session_rows = conn.execute(
-                "SELECT event_id, local_path FROM sessions WHERE event_id = ?",
-                (event_id,),
+                "SELECT id FROM sessions WHERE event_id = ?", (event_id,)
             ).fetchall()
-            targets = self._collect_r2_targets(session_rows)
+            targets = [r2_session_target(event_id, r["id"]) for r in session_rows]
             targets.append(f"event:{event_id}")
             self._record_r2_deletions(conn, targets)
             conn.execute("DELETE FROM sessions WHERE event_id = ?", (event_id,))
@@ -431,20 +438,6 @@ class Storage:
         if event_dir.exists():
             shutil.rmtree(event_dir)
         return True, targets
-
-    def _collect_r2_targets(self, session_rows: list[sqlite3.Row]) -> list[str]:
-        targets: list[str] = []
-        for session_row in session_rows:
-            meta_path = Path(session_row["local_path"]) / "meta.json"
-            meta: dict = {}
-            try:
-                meta = json.loads(meta_path.read_text())
-                target = meta.get("r2_target")
-            except (OSError, json.JSONDecodeError):
-                target = None
-            if target:
-                targets.append(target)
-        return list(dict.fromkeys(targets))
 
     @staticmethod
     def _record_r2_deletions(conn: sqlite3.Connection, targets: list[str]) -> None:
@@ -484,27 +477,6 @@ class Storage:
             ).fetchone()
         return int(row[0])
 
-    def session_meta_path(self, session: Session) -> Path:
-        return Path(session.local_path) / "meta.json"
-
-    def write_session_meta(self, session: Session, meta: dict) -> None:
-        write_json_atomic(self.session_meta_path(session), meta)
-
-    def merge_session_meta(self, session: Session, patch: dict) -> dict:
-        meta = self.get_session_meta(session)
-        meta.update(patch)
-        self.write_session_meta(session, meta)
-        return meta
-
-    def get_session_meta(self, session: Session) -> dict:
-        path = self.session_meta_path(session)
-        if not path.exists():
-            return {}
-        try:
-            return json.loads(path.read_text())
-        except (OSError, json.JSONDecodeError):
-            return {}
-
     def list_sessions_needing_upload(self) -> list[Session]:
         sessions: list[Session] = []
         with self._connect() as conn:
@@ -533,20 +505,6 @@ class Storage:
                 continue
             sessions.append(session)
         return sessions
-
-    def get_session_target(self, session_id: str) -> str | None:
-        """Return the R2 deletion target fixed when the session was finalized."""
-        session = self.get_session(session_id)
-        if not session:
-            return None
-        meta_path = self.session_meta_path(session)
-        if not meta_path.exists():
-            return None
-        try:
-            meta = json.loads(meta_path.read_text())
-        except (OSError, json.JSONDecodeError):
-            return None
-        return meta.get("r2_target")
 
     def sweep_orphan_dirs(self) -> int:
         """Reclaim event/session directories with no matching DB row. Deletes

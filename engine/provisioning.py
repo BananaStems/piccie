@@ -10,6 +10,7 @@ from PIL import Image
 from engine.atomicio import write_json_atomic, write_text_atomic
 from engine.config import ConfigStore, R2Config
 from engine.r2 import R2Uploader
+from engine.r2_boot_config import add_authorized_key
 
 
 def _r2_probe(config: R2Config) -> None:
@@ -17,20 +18,12 @@ def _r2_probe(config: R2Config) -> None:
     uploader = R2Uploader(config)
     event_id = str(uuid.uuid4())
     session_id = str(uuid.uuid4())
-    token = uploader.new_session_share_token(event_id, session_id)
     try:
         with tempfile.TemporaryDirectory(prefix="piccie-r2-probe-") as directory:
             session_dir = Path(directory)
             strip = session_dir / "strip.jpg"
             Image.new("RGB", (2, 2), "#f5a3c7").save(strip, "JPEG")
-            guest_url, _ = uploader.upload_session(
-                session_dir,
-                event_id,
-                session_id,
-                "Piccie readiness check",
-                "2000-01-01",
-                share_token=token,
-            )
+            guest_url = uploader.upload_session(session_dir, event_id, session_id)
             uploader.verify_guest_download(guest_url, strip)
     finally:
         try:
@@ -70,11 +63,8 @@ def provision_booth(
     store.set_admin_pin(payload["admin_pin"])
 
     if payload.get("ssh_authorized_key"):
-        ssh_dir = data_dir / "ssh"
-        ssh_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
-        authorized_keys = ssh_dir / "authorized_keys"
-        write_text_atomic(authorized_keys, payload["ssh_authorized_key"] + "\n")
-        authorized_keys.chmod(0o600)
+        # Adds to, never replaces, a key imported from the microSD boot file.
+        add_authorized_key(data_dir / "ssh" / "authorized_keys", payload["ssh_authorized_key"])
 
     marker = data_dir / ".provisioned"
     write_text_atomic(

@@ -17,6 +17,8 @@ LOCAL_CONFIG_PATH = Path(
 STATUS_PATH = Path(
     os.environ.get("PICCIE_R2_BOOT_STATUS", "/boot/firmware/piccie-r2-status.txt")
 )
+AUTHORIZED_KEYS_PATH = Path("/data/ssh/authorized_keys")
+SSH_KEY_TYPES = ("ssh-ed25519 ", "ssh-rsa ", "ecdsa-sha2-")
 DEGRADED_MARKERS = (
     Path("/run/piccie.degraded"),
     Path("/data/.DEGRADED"),
@@ -28,6 +30,8 @@ EXPECTED_KEYS = {
     "BUCKET_NAME",
     "JURISDICTION",
 }
+# Lets deploy.sh update the booth without anyone typing a key on the touchscreen.
+OPTIONAL_KEYS = {"SSH_PUBLIC_KEY"}
 
 
 class BootConfigError(ValueError):
@@ -43,7 +47,7 @@ def parse_boot_config(text: str) -> dict[str, str]:
         if "=" not in line:
             raise BootConfigError(f"Line {number} must use NAME=value.")
         key, value = (part.strip() for part in line.split("=", 1))
-        if key not in EXPECTED_KEYS:
+        if key not in EXPECTED_KEYS | OPTIONAL_KEYS:
             raise BootConfigError(f"Line {number} has unknown setting {key}.")
         if key in values:
             raise BootConfigError(f"Setting {key} appears more than once.")
@@ -84,6 +88,31 @@ def validated_r2(values: dict[str, str]) -> dict[str, str]:
     }
 
 
+def valid_ssh_key(value: str) -> str:
+    value = value.strip()
+    if value and not value.startswith(SSH_KEY_TYPES):
+        raise BootConfigError(
+            "SSH_PUBLIC_KEY must be one line starting with ssh-ed25519, or blank."
+        )
+    return value
+
+
+def add_authorized_key(path: Path, key: str) -> None:
+    """Add an SSH key for user pi, keeping keys that are already there."""
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    existing = path.read_text().splitlines() if path.exists() else []
+    if key not in existing:
+        write_text_atomic(path, "\n".join([*existing, key]) + "\n")
+    path.chmod(0o600)
+    # sshd reads the file as pi, so a root-owned copy would be ignored.
+    try:
+        pi = pwd.getpwnam("pi")
+        for owned in (path.parent, path):
+            os.chown(owned, pi.pw_uid, pi.pw_gid)
+    except (KeyError, PermissionError):
+        pass
+
+
 def _write_status(message: str, status_path: Path) -> None:
     try:
         write_text_atomic(status_path, message.rstrip() + "\n")
@@ -97,12 +126,14 @@ def import_boot_config(
     destination: Path = LOCAL_CONFIG_PATH,
     status_path: Path = STATUS_PATH,
     degraded_markers: tuple[Path, ...] = DEGRADED_MARKERS,
+    authorized_keys: Path = AUTHORIZED_KEYS_PATH,
 ) -> bool:
     if not source.exists():
         return False
     try:
         values = parse_boot_config(source.read_text())
         r2 = validated_r2(values)
+        ssh_key = valid_ssh_key(values.get("SSH_PUBLIC_KEY", ""))
     except (OSError, UnicodeError, BootConfigError) as exc:
         _write_status(f"Piccie did not import R2 settings: {exc}", status_path)
         return False
@@ -129,9 +160,12 @@ def import_boot_config(
                 os.chown(destination, pi.pw_uid, pi.pw_gid)
             except (KeyError, PermissionError):
                 pass
+        if ssh_key:
+            add_authorized_key(authorized_keys, ssh_key)
         source.unlink()
         _write_status(
-            "R2 settings imported successfully. The credential copy was removed.",
+            "R2 settings imported successfully. The credential copy was removed."
+            + (" Your SSH key was added for remote updates." if ssh_key else ""),
             status_path,
         )
         return True

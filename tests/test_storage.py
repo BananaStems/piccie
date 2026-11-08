@@ -131,33 +131,45 @@ def test_clear_event_photos(storage):
     storage.increment_event_photo_count(event.id)
     ok, basenames = storage.clear_event_photos(event.id)
     assert ok is True
-    assert basenames == [f"event-content:{event.id}"]
+    assert basenames == [f"event-session:{event.id}:{session.id}"]
     assert storage.get_session(session.id) is None
     assert not session_dir.exists()
     refreshed = storage.get_event(event.id)
     assert refreshed.photo_count == 0
 
 
-def test_clear_event_photos_collects_r2_targets(storage):
+def test_clear_event_photos_retires_the_published_gallery(storage):
     event = storage.create_event("Wedding", "2026-06-14", "classic")
     session = storage.create_session(event.id)
-    target = f"event-session:{event.id}:{session.id}"
-    storage.write_session_meta(
-        session,
-        {
-            "session_id": session.id,
-            "event_id": event.id,
-            "r2_target": target,
-            "upload_status": "complete",
-        },
-    )
+    storage.set_event_share(event.id, "https://gallery.example/g", f"{event.id}.token")
+
     ok, basenames = storage.clear_event_photos(event.id)
+
     assert ok is True
-    assert basenames == [target, f"event-content:{event.id}"]
-    assert storage.pending_r2_deletions() == [target, f"event-content:{event.id}"]
-    storage.complete_r2_deletion(target)
-    storage.complete_r2_deletion(f"event-content:{event.id}")
-    assert storage.pending_r2_deletions() == []
+    assert basenames == [
+        f"event-session:{event.id}:{session.id}",
+        f"event-share:{event.id}:{event.id}.token",
+    ]
+    assert storage.pending_r2_deletions() == basenames
+    cleared = storage.get_event(event.id)
+    assert cleared.share_url is None and cleared.share_token is None
+
+
+def test_sweep_orphan_dirs_keeps_folders_with_database_rows(storage):
+    event = storage.create_event("Wedding", "2026-06-14", "classic")
+    session = storage.create_session(event.id)
+    live = Path(session.local_path)
+    (live / "strip.jpg").write_bytes(b"strip")
+    orphan_session = storage.events_dir / event.id / "sessions" / "orphan"
+    orphan_event = storage.events_dir / "orphan-event"
+    orphan_session.mkdir(parents=True)
+    orphan_event.mkdir()
+
+    assert storage.sweep_orphan_dirs() == 2
+
+    assert (live / "strip.jpg").exists()
+    assert not orphan_session.exists()
+    assert not orphan_event.exists()
 
 
 def test_delete_event_removes_db_and_files(storage):
@@ -167,7 +179,7 @@ def test_delete_event_removes_db_and_files(storage):
     assert event_dir.exists()
     ok, basenames = storage.delete_event(event.id)
     assert ok is True
-    assert basenames == [f"event:{event.id}"]
+    assert basenames == [f"event-session:{event.id}:{session.id}", f"event:{event.id}"]
     assert storage.get_event(event.id) is None
     assert storage.get_session(session.id) is None
     assert not event_dir.exists()

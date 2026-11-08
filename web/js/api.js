@@ -1,5 +1,6 @@
 const API = "/api";
 const DEFAULT_TIMEOUT_MS = 15000;
+const SHARE_TIMEOUT_MS = 15 * 60 * 1000;
 let adminToken = "";
 
 async function request(path, options = {}) {
@@ -54,9 +55,9 @@ export const api = {
   getEvent: (id) => request(`/events/${id}`),
   listEventSessions: (id) => request(`/events/${id}/sessions`),
   updateEvent: (id, data) => request(`/events/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
-  getEventShare: (id) => request(`/events/${id}/share`),
-  createEventShare: (id) => request(`/events/${id}/share`, { method: "POST", timeoutMs: 120000 }),
-  regenerateEventShare: (id) => request(`/events/${id}/share/regenerate`, { method: "POST", timeoutMs: 120000 }),
+  // Uploading a whole event's zip over venue Wi-Fi can take several minutes.
+  createEventShare: (id) => request(`/events/${id}/share`, { method: "POST", timeoutMs: SHARE_TIMEOUT_MS }),
+  regenerateEventShare: (id) => request(`/events/${id}/share/regenerate`, { method: "POST", timeoutMs: SHARE_TIMEOUT_MS }),
   disableEventShare: (id) => request(`/events/${id}/share`, { method: "DELETE" }),
   clearEventPhotos: (id) => request(`/events/${id}/clear-photos`, { method: "POST" }),
   deleteEvent: (id) => request(`/events/${id}`, { method: "DELETE" }),
@@ -86,6 +87,9 @@ export const api = {
   getPerformanceSettings: () => request("/settings/performance"),
   updatePerformanceSettings: (data) =>
     request("/settings/performance", { method: "PUT", body: JSON.stringify(data) }),
+  getGuestLinks: () => request("/settings/guest-links"),
+  updateGuestLinks: (domain) =>
+    request("/settings/guest-links", { method: "PUT", body: JSON.stringify({ domain }), timeoutMs: 30000 }),
   shutdown: () => request("/system/shutdown", { method: "POST" }),
   startSession: (eventId) =>
     request(`/events/${eventId}/sessions`, { method: "POST", timeoutMs: 20000 }),

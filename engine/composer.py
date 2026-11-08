@@ -10,6 +10,7 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont, ImageOps
 
 from engine.atomicio import write_bytes_atomic
+from engine.camera_settings import FILTER_NAMES
 from engine.config import ROOT_DIR
 from engine.templates import Template
 
@@ -30,12 +31,11 @@ STRIP_HEIGHT = 1800  # 2×6″ @ 300 DPI
 # Filters are deliberately few and obvious. They run on the preview and final
 # strip, so choosing one is WYSIWYG without camera-style tuning.
 _FILTER_STATE = {"name": "clean", "strength": 1.0}
-_FILTER_NAMES = {"clean", "soft", "warm", "mono", "bold"}
 _WARM_LUT = [min(255, max(0, x + 14)) for x in range(256)] + list(range(256)) + [min(255, max(0, x - 14)) for x in range(256)]
 
 
 def configure_filter(*, name: str | None = None, strength: float | None = None) -> None:
-    if name in _FILTER_NAMES:
+    if name in FILTER_NAMES:
         _FILTER_STATE["name"] = name
     if strength is not None:
         _FILTER_STATE["strength"] = max(0.0, min(1.0, float(strength)))
@@ -302,13 +302,6 @@ def strip_dimensions(template: Template) -> tuple[int, int]:
     return metrics["strip_w"], metrics["strip_h"]
 
 
-def photo_slot_size(template: Template, index: int = 0) -> tuple[int, int]:
-    """Return print slot dimensions for photo index (0-based)."""
-    metrics = _layout_metrics(template.strip_layout)
-    idx = max(0, min(index, len(metrics["slot_heights"]) - 1))
-    return metrics["slot_w"], metrics["slot_heights"][idx]
-
-
 def render_strip_image(
     template: Template,
     line1: str,
@@ -376,7 +369,8 @@ def render_strip_image(
     for idx, _slot in enumerate(photo_slots):
         slot_h = slot_heights[idx]
         if photos and idx < len(photos):
-            photo = _fit_crop(photos[idx].convert("RGB"), slot_w, slot_h)
+            # Filter photos only, so template colours print as previewed.
+            photo = apply_filter(_fit_crop(photos[idx].convert("RGB"), slot_w, slot_h))
         else:
             photo = _placeholder_photo(slot_w, slot_h, idx, placeholder_rgb)
         x = 0 if edge_to_edge else (strip_w - slot_w) // 2
@@ -722,7 +716,6 @@ def compose_strip(
             img = Image.open(path)
             images.append(img)
         canvas = render_strip_image(template, line1, line2, event_date, photos=images, date_separator=date_separator)
-        canvas = apply_filter(canvas)
         # q85 + 4:2:0 chroma subsampling: ~25-40% faster encode of the 3.24 MP
         # strip on the Pi (the heaviest single CPU burst per capture), visually
         # identical on a printed 2x6 strip.

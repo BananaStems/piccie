@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import html
-import json
 import logging
 import secrets
 import time
 import urllib.error
 import urllib.request
+from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
 
 import boto3
 from botocore.config import Config
@@ -16,13 +17,41 @@ from engine.config import R2Config
 from engine.paths import (
     r2_event_archive_key,
     r2_event_gallery_key,
-    r2_event_manifest_key,
     r2_event_prefix,
     r2_event_strip_key,
+    r2_legacy_event_prefix,
+    r2_legacy_share_keys,
 )
 
 logger = logging.getLogger(__name__)
 GUEST_LINK_EXPIRY_SECONDS = 7 * 24 * 60 * 60
+REFRESH_MARGIN_SECONDS = 24 * 60 * 60
+# Cloudflare blocks urllib's default User-Agent on proxied custom domains (error 1010).
+USER_AGENT = "Mozilla/5.0 (compatible; Piccie)"
+
+
+def signed_url_expiring(url: str) -> bool:
+    """True when a SigV4 presigned URL expires within REFRESH_MARGIN_SECONDS."""
+    query = parse_qs(urlsplit(url).query)
+    try:
+        signed_at = datetime.strptime(query["X-Amz-Date"][0], "%Y%m%dT%H%M%SZ")
+        lifetime = int(query["X-Amz-Expires"][0])
+    except (KeyError, ValueError):
+        return False  # not a presigned URL; nothing to refresh
+    age = datetime.now(timezone.utc) - signed_at.replace(tzinfo=timezone.utc)
+    return age.total_seconds() >= lifetime - REFRESH_MARGIN_SECONDS
+
+
+def link_outdated(url: str, public_domain: str) -> bool:
+    """True when a saved link is near expiry or predates a custom-domain change."""
+    if public_domain:
+        return not url.startswith(f"https://{public_domain}/")
+    return "X-Amz-Signature=" not in url or signed_url_expiring(url)
+
+
+def _legacy_archive_key(event_id: str) -> str:
+    # Releases up to 1.0.6 kept one shared zip per event.
+    return f"{r2_legacy_event_prefix(event_id)}download-all.zip"
 
 
 class R2Uploader:
@@ -46,28 +75,11 @@ class R2Uploader:
             ),
         )
 
-    def upload_session(
-        self,
-        session_dir: Path,
-        event_id: str,
-        session_id: str,
-        event_name: str,
-        event_date: str,
-        share_token: str | None = None,
-    ) -> tuple[str, str]:
+    def upload_session(self, session_dir: Path, event_id: str, session_id: str) -> str:
         """Upload a private strip and return a time-limited R2 download URL."""
-        strip_local = session_dir / "strip.jpg"
         strip_key = r2_event_strip_key(event_id, session_id)
-        self._upload_file(strip_local, strip_key, content_type="image/jpeg")
-
-        token = share_token or self.new_session_share_token(event_id, session_id)
-        self._upload_manifest(event_id, event_name, event_date)
-        url = self.download_url(strip_key)
-        return url, token
-
-    @staticmethod
-    def new_session_share_token(event_id: str, session_id: str) -> str:
-        return f"{event_id}.{session_id}.{secrets.token_urlsafe(32)}"
+        self._upload_file(session_dir / "strip.jpg", strip_key, content_type="image/jpeg")
+        return self.download_url(strip_key)
 
     def publish_event(
         self,
@@ -78,15 +90,11 @@ class R2Uploader:
         previous_token: str | None = None,
     ) -> tuple[str, str]:
         token = f"{event_id}.{secrets.token_urlsafe(32)}"
-        self._upload_manifest(event_id, event_name, event_date)
-        self._upload_file(
-            archive_path,
-            r2_event_archive_key(event_id),
-            content_type="application/zip",
-        )
+        archive_key = r2_event_archive_key(event_id, token)
+        self._upload_file(archive_path, archive_key, content_type="application/zip")
         gallery_key = r2_event_gallery_key(event_id, token)
         self._upload_bytes(
-            self._gallery_html(event_id, event_name, event_date),
+            self._gallery_html(event_id, event_name, event_date, archive_key),
             gallery_key,
             content_type="text/html; charset=utf-8",
         )
@@ -95,26 +103,37 @@ class R2Uploader:
         return self.download_url(gallery_key), token
 
     def disable_share(self, event_id: str, token: str) -> None:
-        self.client.delete_object(
+        keys = (
+            r2_event_gallery_key(event_id, token),
+            r2_event_archive_key(event_id, token),
+            *r2_legacy_share_keys(event_id, token),
+            _legacy_archive_key(event_id),
+        )
+        self.client.delete_objects(
             Bucket=self.config.bucket,
-            Key=r2_event_gallery_key(event_id, token),
+            Delete={"Objects": [{"Key": key} for key in keys], "Quiet": True},
         )
 
     def delete_target(self, target: str) -> None:
         if target.startswith("event:"):
-            self._delete_prefix(r2_event_prefix(target.split(":", 1)[1]))
+            event_id = target.split(":", 1)[1]
+            self._delete_prefix(r2_event_prefix(event_id))
+            self._delete_prefix(r2_legacy_event_prefix(event_id))
             return
         if target.startswith("event-content:"):
-            event_id = target.split(":", 1)[1]
-            self._delete_prefix(f"{r2_event_prefix(event_id)}sessions/")
+            # Left by clears up to 1.0.6, which also tombstoned each session.
+            # Deleting the whole sessions/ prefix here would take later strips too.
             self.client.delete_object(
                 Bucket=self.config.bucket,
-                Key=r2_event_archive_key(event_id),
+                Key=_legacy_archive_key(target.split(":", 1)[1]),
             )
             return
         if target.startswith("event-session:"):
             _, event_id, session_id = target.split(":", 2)
-            self._delete_prefix(f"{r2_event_prefix(event_id)}sessions/{session_id}/")
+            self.client.delete_object(
+                Bucket=self.config.bucket, Key=r2_event_strip_key(event_id, session_id)
+            )
+            self._delete_prefix(f"{r2_legacy_event_prefix(event_id)}sessions/{session_id}/")
             return
         if target.startswith("event-share:"):
             _, event_id, token = target.split(":", 2)
@@ -122,22 +141,28 @@ class R2Uploader:
             return
         raise ValueError(f"Unknown R2 deletion target: {target}")
 
-    def _delete_prefix(self, prefix: str) -> None:
+    def _keys(self, prefix: str) -> list[str]:
+        keys: list[str] = []
         continuation: str | None = None
         while True:
             args = {"Bucket": self.config.bucket, "Prefix": prefix}
             if continuation:
                 args["ContinuationToken"] = continuation
             response = self.client.list_objects_v2(**args)
-            objects = [{"Key": item["Key"]} for item in response.get("Contents", [])]
-            if objects:
-                self.client.delete_objects(
-                    Bucket=self.config.bucket,
-                    Delete={"Objects": objects, "Quiet": True},
-                )
+            keys.extend(item["Key"] for item in response.get("Contents", []))
             if not response.get("IsTruncated"):
-                break
+                return keys
             continuation = response.get("NextContinuationToken")
+            if not continuation:
+                raise RuntimeError("R2 returned an incomplete listing.")
+
+    def _delete_prefix(self, prefix: str) -> None:
+        keys = self._keys(prefix)
+        for start in range(0, len(keys), 1000):  # delete_objects takes at most 1000 keys
+            self.client.delete_objects(
+                Bucket=self.config.bucket,
+                Delete={"Objects": [{"Key": key} for key in keys[start:start + 1000]], "Quiet": True},
+            )
         logger.info("Deleted R2 prefix s3://%s/%s", self.config.bucket, prefix)
 
     def _upload_file(
@@ -150,13 +175,10 @@ class R2Uploader:
             str(path),
             self.config.bucket,
             key,
-            ExtraArgs={"ContentType": content_type},
+            # "private" stops Cloudflare's edge caching a photo after it is deleted.
+            ExtraArgs={"ContentType": content_type, "CacheControl": "private"},
         )
         logger.info("Uploaded %s to s3://%s/%s", path.name, self.config.bucket, key)
-
-    def _upload_json(self, payload: dict, key: str) -> None:
-        encoded = json.dumps(payload, separators=(",", ":")).encode("utf-8")
-        self._upload_bytes(encoded, key, content_type="application/json")
 
     def _upload_bytes(self, data: bytes, key: str, *, content_type: str) -> None:
         self.client.put_object(
@@ -164,16 +186,13 @@ class R2Uploader:
             Key=key,
             Body=data,
             ContentType=content_type,
+            CacheControl="private",
         )
         logger.info("Uploaded %s to s3://%s/%s", key.split("/")[-1], self.config.bucket, key)
 
-    def _upload_manifest(self, event_id: str, name: str, date: str) -> None:
-        self._upload_json(
-            {"id": event_id, "name": name, "date": date},
-            r2_event_manifest_key(event_id),
-        )
-
     def download_url(self, key: str) -> str:
+        if self.config.public_domain:
+            return f"https://{self.config.public_domain}/{key}"
         return self.client.generate_presigned_url(
             "get_object",
             Params={"Bucket": self.config.bucket, "Key": key},
@@ -185,26 +204,15 @@ class R2Uploader:
         event_id: str,
         event_name: str,
         event_date: str,
+        archive_key: str,
     ) -> bytes:
-        prefix = f"{r2_event_prefix(event_id)}sessions/"
-        strip_keys: list[str] = []
-        continuation: str | None = None
-        while True:
-            args = {"Bucket": self.config.bucket, "Prefix": prefix}
-            if continuation:
-                args["ContinuationToken"] = continuation
-            response = self.client.list_objects_v2(**args)
-            strip_keys.extend(
-                item["Key"]
-                for item in response.get("Contents", [])
-                if item.get("Key", "").endswith("/strip.jpg")
-            )
-            if not response.get("IsTruncated"):
-                break
-            continuation = response.get("NextContinuationToken")
-            if not continuation:
-                raise RuntimeError("R2 returned an incomplete event listing.")
-        strip_keys.sort()
+        strip_keys = [
+            key for key in self._keys(r2_event_prefix(event_id)) if key.endswith(".jpg")
+        ] + [
+            key
+            for key in self._keys(f"{r2_legacy_event_prefix(event_id)}sessions/")
+            if key.endswith("/strip.jpg")
+        ]
         title = html.escape(event_name)
         date = html.escape(event_date)
         cards = "".join(
@@ -217,9 +225,7 @@ class R2Uploader:
         )
         if not cards:
             cards = "<p>No photo strips have uploaded yet.</p>"
-        archive_url = html.escape(
-            self.download_url(r2_event_archive_key(event_id)), quote=True
-        )
+        archive_url = html.escape(self.download_url(archive_key), quote=True)
         document = f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -246,26 +252,62 @@ box-shadow:0 8px 30px #47243818}}.strip img{{width:100%;height:auto;border-radiu
         *,
         attempts: int = 5,
     ) -> None:
-        """Require the signed private R2 URL to return the exact uploaded JPEG."""
-        expected = expected_path.read_bytes()
+        """Require the signed private R2 URL to serve the uploaded strip.
+
+        Fetches one byte, not the whole strip: that already proves the signature,
+        booth clock and object, and the size check catches a wrong file. The guest
+        sees their QR sooner on slow venue Wi-Fi.
+        """
+        expected_size = str(expected_path.stat().st_size)
+        with expected_path.open("rb") as fh:
+            expected_first = fh.read(1)
         last_error: Exception | None = None
         for attempt in range(attempts):
             try:
                 request = urllib.request.Request(
                     url,
-                    headers={"Cache-Control": "no-cache"},
+                    headers={
+                        "Range": "bytes=0-0",
+                        "Cache-Control": "no-cache",
+                        "User-Agent": USER_AGENT,
+                    },
                 )
                 with urllib.request.urlopen(request, timeout=10) as response:
-                    if response.read() == expected:
+                    # 206 reports the full size after "/"; a server ignoring Range sends 200.
+                    total = response.headers.get("Content-Range", "").rpartition("/")[2]
+                    total = total or response.headers.get("Content-Length", "")
+                    if total == expected_size and response.read(1) == expected_first:
                         return
                     last_error = RuntimeError(
-                        "The guest link returned different image data."
+                        "The guest link returned a different file."
                     )
             except (OSError, urllib.error.HTTPError) as exc:
                 last_error = exc
             if attempt < attempts - 1:
                 time.sleep(2)
         raise RuntimeError(
-            "R2 accepted the strip, but its signed download URL could not return it. "
-            "Check the R2 credentials, booth clock, and venue internet access."
+            "R2 accepted the strip, but its guest link could not return it. "
+            "Check the R2 credentials, booth clock, custom domain and venue internet access."
         ) from last_error
+
+    def check_public_domain(self, domain: str) -> None:
+        """Prove https://<domain>/ serves this bucket before guests get links on it."""
+        key = f"piccie-check-{secrets.token_hex(8)}.txt"
+        body = secrets.token_hex(16).encode()
+        self._upload_bytes(body, key, content_type="text/plain")
+        fix = (
+            f"In Cloudflare, open R2 > {self.config.bucket} > Settings > Custom Domains "
+            f"and check that {domain} is connected and Active."
+        )
+        try:
+            request = urllib.request.Request(
+                f"https://{domain}/{key}", headers={"User-Agent": USER_AGENT}
+            )
+            with urllib.request.urlopen(request, timeout=10) as response:
+                served = response.read(len(body) + 1)
+        except OSError as exc:  # includes HTTPError and URLError
+            raise RuntimeError(f"{domain} did not answer ({exc}). {fix}") from exc
+        finally:
+            self.client.delete_object(Bucket=self.config.bucket, Key=key)
+        if served != body:
+            raise RuntimeError(f"{domain} answered, but not with this bucket's files. {fix}")

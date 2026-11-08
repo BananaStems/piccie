@@ -2350,8 +2350,10 @@ input[type="date"]::-webkit-calendar-picker-indicator {
   cursor: pointer;
 }
 
-.set-select select {
+.set-select select,
+.set-select input {
   flex: 0 0 50%;
+  min-width: 0;
   min-height: var(--control-height);
   border-radius: var(--control-radius);
   border: 1px solid var(--border);

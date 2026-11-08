@@ -29,6 +29,7 @@ class R2Config:
     secret_key: str = ""
     bucket: str = ""
     jurisdiction: str = "default"
+    public_domain: str = ""  # empty: private bucket, 7-day signed links
 
 
 @dataclass
@@ -40,6 +41,7 @@ class AppConfig:
     admin_pin_hash: str | None = None
     performance_device: str | None = None
     performance_mode: str = "standard"
+    public_domain: str = ""
 
     @property
     def admin_pin_set(self) -> bool:
@@ -64,14 +66,19 @@ class ConfigStore:
         if not self.path.exists():
             return None
         raw = json.loads(self.path.read_text())
+        r2 = self.r2_from_local()
+        public_domain = raw.get("public_domain") or ""
+        if r2:
+            r2.public_domain = public_domain
         return AppConfig(
-            r2=self.r2_from_local(),
+            r2=r2,
             wifi_ssid=raw.get("wifi_ssid"),
             active_event_id=raw.get("active_event_id"),
             admin_pin_salt=raw.get("admin_pin_salt"),
             admin_pin_hash=raw.get("admin_pin_hash"),
             performance_device=raw.get("performance_device"),
             performance_mode=raw.get("performance_mode", "standard"),
+            public_domain=public_domain,
         )
 
     def save(self, config: AppConfig) -> None:
@@ -84,6 +91,7 @@ class ConfigStore:
                 "admin_pin_hash": config.admin_pin_hash,
                 "performance_device": config.performance_device,
                 "performance_mode": config.performance_mode,
+                "public_domain": config.public_domain,
             },
         )
 
@@ -119,6 +127,14 @@ class ConfigStore:
         config = self.ensure()
         config.performance_device = device
         config.performance_mode = mode
+        self.save(config)
+        return config
+
+    def set_public_domain(self, domain: str) -> AppConfig:
+        config = self.ensure()
+        config.public_domain = domain
+        if config.r2:
+            config.r2.public_domain = domain
         self.save(config)
         return config
 

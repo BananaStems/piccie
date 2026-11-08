@@ -141,6 +141,7 @@ export async function renderSettingsScreen({ app, state, render, api, escapeHtml
     return;
   }
   const performance = await api.getPerformanceSettings().catch((error) => ({ error: error.message }));
+  const guestLinks = await api.getGuestLinks().catch((error) => ({ error: error.message }));
 
   const settings = data.settings;
   const options = data.options || {};
@@ -176,6 +177,17 @@ export async function renderSettingsScreen({ app, state, render, api, escapeHtml
         <p class="performance-status" id="performance-status"></p>
         <button type="button" class="btn performance-apply" id="performance-apply">Apply & restart</button>
       </div>`;
+  const guestLinksPanel = guestLinks.error
+    ? `<p class="error-text">${escapeHtml(guestLinks.error)}</p>`
+    : `<div class="performance-panel guest-links-panel">
+        <label class="set-row set-select">
+          <span class="set-label">Custom domain</span>
+          <input id="guest-domain" type="text" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="photos.example.com" value="${escapeHtml(guestLinks.domain || "")}" />
+        </label>
+        <p class="performance-detail">Leave empty for free private links that last seven days. A domain connected to your R2 bucket gives a smaller QR code, but anyone with a link can open that photo until you clear the event.</p>
+        <p class="performance-status" id="guest-domain-status"></p>
+        <button type="button" class="btn performance-apply" id="guest-domain-save">Save</button>
+      </div>`;
   const appVersion = escapeHtml(state.status?.version || "Unknown");
   const buildId = escapeHtml(state.status?.build || "Unknown");
   const versionPanel = `<div class="version-panel">
@@ -195,6 +207,7 @@ export async function renderSettingsScreen({ app, state, render, api, escapeHtml
       toggle({ id: "set-af", label: "Continuous autofocus", key: "af_continuous", checked: settings.af_continuous }),
       slider({ id: "set-lens", label: "Manual focus", key: "lens_position", value: settings.lens_position, min: 0, max: 10, step: 0.1, rowId: "row-lens", hidden: settings.af_continuous }),
     ]),
+    group("Guest links", [guestLinksPanel]),
     group("System performance", [performancePanel]),
     group("About", [versionPanel]),
   ];
@@ -280,7 +293,30 @@ export async function renderSettingsScreen({ app, state, render, api, escapeHtml
     });
   });
 
-  const performanceElement = document.querySelector(".performance-panel");
+  const domainSave = document.getElementById("guest-domain-save");
+  if (domainSave) {
+    const domainInput = document.getElementById("guest-domain");
+    const domainStatus = document.getElementById("guest-domain-status");
+    domainSave.addEventListener("click", async () => {
+      domainSave.disabled = true;
+      domainStatus.classList.remove("error-text");
+      domainStatus.textContent = domainInput.value.trim() ? "Testing the domain…" : "Saving…";
+      try {
+        const result = await api.updateGuestLinks(domainInput.value);
+        domainInput.value = result.domain;
+        domainStatus.textContent = result.domain
+          ? `New QR codes use ${result.domain}.`
+          : "New QR codes use free private links.";
+      } catch (error) {
+        domainStatus.textContent = error.message;
+        domainStatus.classList.add("error-text");
+      } finally {
+        domainSave.disabled = false;
+      }
+    });
+  }
+
+  const performanceElement = document.querySelector(".performance-panel:not(.guest-links-panel)");
   if (performanceElement) {
     const deviceSelect = document.getElementById("performance-device");
     const modeButtons = [...performanceElement.querySelectorAll(".performance-option")];

@@ -16,14 +16,12 @@ from engine.camera_settings import CameraSettings
 
 logger = logging.getLogger(__name__)
 
-# Setting fields that only affect the strip/preview grade (never the camera).
+# Setting fields that only affect the strip/preview grade (never the camera),
+# so they must not re-arm libcamera controls.
 _FILTER_KEYS = {
     "filter_name",
     "filter_strength",
 }
-
-# Settings that never touch libcamera must not re-arm camera controls.
-_NON_CAMERA_KEYS = _FILTER_KEYS
 
 # Picamera2 accepts a numeric `wait` value in seconds. A stalled camera must
 # fail the supervised process instead of holding the shared camera lock forever.
@@ -148,7 +146,6 @@ class WebcamBackend:
 
         self._cv2 = cv2
         self._cap = _resolve_webcam(cv2)
-        self._preview_size = preview_size()
 
     def _read_rgb_image(self) -> Image.Image:
         ok, frame = self._cap.read()
@@ -162,11 +159,6 @@ class WebcamBackend:
         # preview chokepoint (_prepare_preview_jpeg), so saved stills stay as the
         # sensor captured them and match the strip.
         return Image.fromarray(frame)
-
-    def capture_preview_jpeg(self, enhance) -> bytes:
-        img = _fit_resize(self._read_rgb_image(), *self._preview_size)
-        img = enhance(img)
-        return _image_to_jpeg(img, preview_jpeg_quality())
 
     def capture_still_jpeg(self, enhance) -> bytes:
         img = enhance(self._read_rgb_image())
@@ -402,7 +394,7 @@ class CameraService:
         self._settings.merge(patch)
         if changed & _FILTER_KEYS:
             self._configure_filter()
-        camera_changed = changed - _NON_CAMERA_KEYS
+        camera_changed = changed - _FILTER_KEYS
         if camera_changed and self._picam is not None:
             with self._camera_lock:
                 self._picam.apply_settings(self._settings, changed=camera_changed)
@@ -511,18 +503,6 @@ class CameraService:
                 if self._preview_failures >= MAX_PREVIEW_FAILURES:
                     self._restart_for_camera_failure("preview stream stalled")
             time.sleep(self._preview_interval)
-
-    def get_preview_jpeg(self) -> bytes:
-        with self._frame_lock:
-            jpeg = self._latest_jpeg
-        if jpeg is not None:
-            return jpeg
-        with self._camera_lock:
-            jpeg = self._capture_preview_jpeg()
-        with self._frame_lock:
-            self._latest_jpeg = jpeg
-            self._latest_jpeg_ts = time.monotonic()
-        return jpeg
 
     def capture_preview_frame(self) -> bytes:
         """Capture one fresh preview JPEG on demand. Used by the settings-screen

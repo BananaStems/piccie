@@ -165,7 +165,12 @@ boot drive is not visible. The drive works on macOS, Windows and Linux.
    lines in `piccie-r2.txt`. Cloudflare shows the secret only once.
 6. Leave `JURISDICTION=default` unless the bucket was explicitly created in the
    EU or FedRAMP jurisdiction.
-7. Save the file and safely eject the microSD card.
+7. Optional but recommended: paste your computer's SSH public key on the
+   `SSH_PUBLIC_KEY=` line so later updates install over Wi-Fi without removing
+   the card (see [Updating an installed booth](#updating-an-installed-booth)).
+   On a Mac, `pbcopy < ~/.ssh/id_ed25519.pub` copies it. If you have no key yet,
+   create one with `ssh-keygen -t ed25519`.
+8. Save the file and safely eject the microSD card.
 
 The file should contain only these settings after the comment instructions:
 
@@ -175,6 +180,7 @@ ACCESS_KEY_ID=your-r2-access-key-id
 SECRET_ACCESS_KEY=your-r2-secret-access-key
 BUCKET_NAME=piccie-photos
 JURISDICTION=default
+SSH_PUBLIC_KEY=ssh-ed25519 AAAA... you@computer
 ```
 
 Piccie validates and moves these values into the writable data partition before
@@ -188,6 +194,30 @@ R2 remains private. Piccie creates signed guest download links that work for
 seven days, which is Cloudflare's maximum. Generate a new event link from the
 booth if an older event needs to be shared again.
 
+### Optional: smaller QR codes with your own domain
+
+The free setup above works, but a signed link is long, so its QR code is dense
+(73 × 73 squares). A domain connected to your bucket makes links short enough for
+a 29–33 square QR code. A domain costs money every year, so this is optional.
+
+1. In the Cloudflare dashboard, open **Domain Registration → Register Domains**
+   and buy a domain. Cloudflare charges the registry's price with no markup on
+   renewal; `.uk` is about $5 a year and `.com` about $10. Buying it in the same
+   Cloudflare account matters: R2 only connects domains that live in the bucket's
+   account. A domain bought elsewhere works after you move its DNS to Cloudflare.
+2. Open **R2 → piccie-photos → Settings → Custom Domains**, select **Add** and
+   enter the domain or a subdomain such as `photos.example.com`. Wait until it
+   shows **Active**.
+3. On the booth, open **Settings → Guest links**, enter the same domain and
+   select **Save**. Piccie uploads a test file and reads it back through the
+   domain before it switches. Leave the field empty to go back to free links.
+
+With a domain, anyone who has a photo's link can open it, and links no longer
+expire after seven days. Photo names are random and cannot be guessed or listed.
+Clear photos or delete the event to take them offline. Avoid the cheapest
+spam-heavy endings such as `.bid`, `.win` or `.loan`: phones and venue networks
+often block them.
+
 ## 4. Complete first boot
 
 Before powering on, connect the touchscreen, camera, active cooling and a
@@ -199,8 +229,8 @@ remove power or the card during that restart.
 2. Choose the Wi-Fi network used for initial setup.
 3. Confirm that Piccie found and securely imported the R2 file.
 4. Choose an operator PIN.
-5. Add your computer's SSH public key if you want remote updates and access to
-   the soak test, then finish setup.
+5. If you did not add an SSH key to `piccie-r2.txt`, you can paste one here for
+   remote updates and the soak test. Then finish setup.
 
 Piccie uploads a temporary private strip and downloads it through a signed R2
 link before completing onboarding. It then restarts once more to enable the
@@ -254,18 +284,20 @@ journalctl -u piccie-engine
 
 ## Updating an installed booth
 
-If an SSH key was added during onboarding, most app and interface changes can
-be installed without reflashing:
+If your SSH key was added in `piccie-r2.txt` or during onboarding, app and
+interface changes install over Wi-Fi without removing the card. With the booth
+on and your computer on the same network, run this from the repository:
 
 ```bash
-./scripts/deploy.sh 192.168.1.145
+./scripts/deploy.sh piccie.local
 ```
 
-The update switches releases atomically and rolls back if its health check
-fails. Changes to Raspberry Pi OS, Python dependencies, system services or the
+Use the booth's IP address instead if `piccie.local` does not resolve. The
+update switches releases atomically and rolls back if its health check fails.
+Changes to Raspberry Pi OS, Python dependencies, system services or the
 partition layout still require a rebuilt image and a reflash. SSH password
-login is disabled: the public key must already have been added during
-onboarding.
+login is disabled, so a booth set up without a key needs one more reflash
+with the key added.
 
 ## Local development
 

@@ -17,9 +17,15 @@
 #
 # Keep these credentials private. Anyone with them can access this R2 bucket.
 # The bucket stays private. Piccie creates time-limited guest download links.
+#
+# Optional, for updates over Wi-Fi without removing this card: paste your
+# computer's SSH public key after SSH_PUBLIC_KEY= as one line. On a Mac, run
+#   pbcopy < ~/.ssh/id_ed25519.pub
+# then paste. Leave it blank to skip. The private key stays on your computer.
 
 ACCOUNT_ID=
 ACCESS_KEY_ID=
 SECRET_ACCESS_KEY=
 BUCKET_NAME=piccie-photos
 JURISDICTION=default
+SSH_PUBLIC_KEY=

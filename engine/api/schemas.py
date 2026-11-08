@@ -6,6 +6,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from engine.r2_boot_config import SSH_KEY_TYPES
+
 
 class StatusResponse(BaseModel):
     version: str
@@ -47,6 +49,10 @@ class PerformanceSettingsRequest(BaseModel):
         return self
 
 
+class GuestLinksRequest(BaseModel):
+    domain: str = Field("", max_length=300)
+
+
 class WifiConnectRequest(BaseModel):
     ssid: str = Field(min_length=1)
     password: str | None = None
@@ -61,7 +67,7 @@ class OnboardingCompleteRequest(BaseModel):
     @classmethod
     def valid_ssh_key(cls, value: str) -> str:
         value = value.strip()
-        if value and not value.startswith(("ssh-ed25519 ", "ssh-rsa ", "ecdsa-sha2-")):
+        if value and not value.startswith(SSH_KEY_TYPES):
             raise ValueError("Enter an OpenSSH public key, or leave this blank")
         return value
 

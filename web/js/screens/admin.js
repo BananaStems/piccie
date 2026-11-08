@@ -180,7 +180,7 @@ export function renderGalleryScreen({ app, state, render, api, escapeHtml }) {
         <div class="gallery-body">
           <div class="gallery-grid drag-scroll">
             ${sessions.map((session, index) => `<button class="gallery-thumb${session.id === selected?.id ? " selected" : ""}" type="button" data-session="${session.id}" aria-label="View photo strip ${sessions.length - index}" aria-pressed="${session.id === selected?.id}">
-              ${session.photo_local_urls.map((url, photoIndex) => `<img src="${url}" alt="Photo ${photoIndex + 1} from strip ${sessions.length - index}" draggable="false" />`).join("")}
+              ${session.photo_local_urls.map((url, photoIndex) => `<img src="${url}" alt="Photo ${photoIndex + 1} from strip ${sessions.length - index}" loading="lazy" decoding="async" draggable="false" />`).join("")}
             </button>`).join("")}
           </div>
           <div class="gallery-detail">
@@ -203,22 +203,18 @@ export function renderGalleryScreen({ app, state, render, api, escapeHtml }) {
   };
   document.getElementById("gallery-share")?.addEventListener("click", async (event) => {
     const button = event.currentTarget;
-    if (state.galleryEvent.share_url) {
-      showEventShare(state.galleryEvent.share_url);
-      return;
-    }
     button.disabled = true;
-    button.textContent = "Preparing…";
+    button.textContent = "Uploading gallery…";
     try {
+      // The booth returns the live link at once, or rebuilds one near its 7-day expiry.
       const share = await api.createEventShare(state.galleryEvent.id);
       state.galleryEvent.share_url = share.url;
-      const stored = state.events.find((item) => item.id === state.galleryEvent.id);
-      if (stored) stored.share_url = share.url;
       showEventShare(share.url);
     } catch (error) {
+      showShareError(error.message);
+    } finally {
       button.disabled = false;
       button.textContent = "Share event";
-      showShareError(error.message);
     }
   });
   app.querySelectorAll(".gallery-thumb").forEach((thumb) => {
@@ -279,7 +275,7 @@ export function renderGalleryScreen({ app, state, render, api, escapeHtml }) {
     };
     overlay.querySelector("#event-share-regenerate").onclick = async () => {
       setBusy(true);
-      status.textContent = "Creating a new link…";
+      status.textContent = "Uploading a new gallery. This can take a few minutes…";
       try {
         const share = await api.regenerateEventShare(state.galleryEvent.id);
         state.galleryEvent.share_url = share.url;
@@ -296,8 +292,6 @@ export function renderGalleryScreen({ app, state, render, api, escapeHtml }) {
       try {
         await api.disableEventShare(state.galleryEvent.id);
         state.galleryEvent.share_url = null;
-        const stored = state.events.find((item) => item.id === state.galleryEvent.id);
-        if (stored) stored.share_url = null;
         overlay.remove();
       } catch (error) {
         status.textContent = error.message;
