@@ -1,0 +1,46 @@
+name: Setup help
+description: Stuck flashing the card, joining Wi-Fi, or finishing setup on your phone.
+labels: ["setup help"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Sorry it's not working yet. Have a quick look at the
+        [troubleshooting guide](https://github.com/BananaStems/piccie/blob/main/docs/troubleshooting.md)
+        first; most setup problems have a fix there.
+  - type: dropdown
+    id: step
+    attributes:
+      label: Where are you stuck?
+      options:
+        - Flashing the microSD card
+        - First boot or restart loop
+        - Joining Wi-Fi on the booth
+        - Finishing setup on my phone or computer
+        - Cloudflare storage (bucket, key, own domain)
+        - Something else
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What do you see?
+      description: The message on the booth or your phone, word for word if you can. A photo of the screen helps a lot.
+    validations:
+      required: true
+  - type: textarea
+    id: tried
+    attributes:
+      label: What have you tried?
+  - type: input
+    id: version
+    attributes:
+      label: Piccie version
+      description: The image file you flashed (for example piccie-v1.1.0-arm64.img.xz), or Settings → About on the booth.
+    validations:
+      required: true
+  - type: input
+    id: hardware
+    attributes:
+      label: Hardware
+      description: Pi model, camera and screen, if they differ from the parts list.

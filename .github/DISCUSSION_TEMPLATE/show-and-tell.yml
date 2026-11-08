@@ -1,0 +1,17 @@
+title: "I built one: "
+body:
+  - type: markdown
+    attributes:
+      value: Thanks for sharing your booth! Photos of the build and a strip or two make the best posts.
+  - type: textarea
+    id: build
+    attributes:
+      label: Your booth
+      description: Photos, the event you used it at, and anything you changed from the parts list.
+    validations:
+      required: true
+  - type: textarea
+    id: notes
+    attributes:
+      label: Anything that was hard?
+      description: Tips for the next builder, or something we should make easier.

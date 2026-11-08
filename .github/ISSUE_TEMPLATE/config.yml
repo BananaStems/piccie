@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: I built one
+    url: https://github.com/BananaStems/piccie/discussions/new?category=show-and-tell
+    about: Show off your booth or your strips in Show and tell. We'd love to see it.
+  - name: Ideas and questions
+    url: https://github.com/BananaStems/piccie/discussions
+    about: Ask anything or suggest a feature in Discussions.
