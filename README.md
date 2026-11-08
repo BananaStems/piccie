@@ -17,15 +17,13 @@ download their strip. Organisers create events, manage galleries and design
 templates from a phone connected to the same Wi-Fi.
 
 Piccie is self-hosted. The booth stores its own data and uploads finished strips
-directly to a private bucket in your Cloudflare R2 account. After flashing the
-image—and before the first boot—you must complete `piccie-r2.txt` with your R2
-credentials and copy it to the top level of the microSD card's boot drive.
-Piccie imports it once and creates seven-day signed guest links without a
-Worker, OAuth client, GitHub connection or public bucket. Wi-Fi is configured
-separately on Piccie's touchscreen during first-time setup.
+directly to a private bucket in your Cloudflare R2 account. It creates
+seven-day signed guest links without a Worker, OAuth client, GitHub connection
+or public bucket. Optionally, connect your own domain to a second bucket for
+short links and smaller QR codes that don't expire.
 
-Guest QR codes point directly to those private HTTPS R2 links. A guest can use
-mobile data or any Wi-Fi; their phone never needs to join the booth's network.
+Guest QR codes point straight to R2 over HTTPS. A guest can use mobile data or
+any Wi-Fi; their phone never needs to join the booth's network.
 
 R2 media is organised by event name and date. For example, an event named
 “Sarah & James” on 14 June 2026 uses `sarah-james-2026-06-14/`, with finished
@@ -35,21 +33,18 @@ numbers are permanent five-digit identifiers such as
 a QR code whose **Download all photos** action transfers one ZIP containing
 both folders.
 
-## Before the first boot
+## First-time setup
 
 1. Flash the Piccie image with Raspberry Pi Imager and skip its operating-system
    customisation options.
-2. Reinsert the microSD card into your computer and open its visible boot drive.
-3. Complete the included `piccie-r2.txt` template with your Cloudflare R2
-   credentials and, optionally, your computer's SSH public key—or copy a
-   previously completed file onto the boot drive. The filename must remain
-   exactly `piccie-r2.txt`. Never put an SSH private key in this file.
-4. Safely eject the card and boot Piccie. Choose the Wi-Fi network and enter its
-   password on the Piccie touchscreen; Wi-Fi details do not belong in the R2
-   file.
+2. Boot Piccie and choose the Wi-Fi network on its touchscreen. That's the only
+   thing you type on the booth.
+3. Scan the QR code the booth shows, or open its address on a computer on the
+   same Wi-Fi. Paste your Cloudflare R2 details, optionally add a custom domain
+   and an SSH public key, choose the operator PIN, and select **Finish setup**.
 
-The four-digit operator PIN and SSH public key can both be changed later under **Settings
-→ Operator access**.
+Cloud storage, the custom domain and the SSH key can be changed later from
+**Settings → Operator access → Open on phone or computer**.
 
 ## Get started
 
@@ -57,8 +52,8 @@ Choose the guide you need:
 
 1. **[Set up the software](docs/software-setup.md)** — download the ready-made
    image, or build it yourself on macOS, Linux or Windows. Then flash the
-   microSD card, add the required R2 file, complete Wi-Fi setup on Piccie and
-   run the reliability test.
+   microSD card, prepare Cloudflare R2, complete setup and run the reliability
+   test.
 2. **[Build the hardware](docs/hardware.md)** — see the current parts list and
    printed components. STL files and full assembly instructions are coming
    soon.

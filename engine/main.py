@@ -8,7 +8,7 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
-from engine.api.routes import STUDIO_LINK_INACTIVE, router
+from engine.api.routes import SETUP_LINK_INACTIVE, STUDIO_LINK_INACTIVE, router
 from engine.camera import CameraService
 from engine.capture_delivery import CaptureDelivery
 from engine.config import ROOT_DIR, ConfigStore
@@ -20,6 +20,7 @@ from engine.upload_queue import UploadQueue
 WEB_DIR = ROOT_DIR / "web"
 # Eight 3 MB template images, base64-encoded, plus the layer JSON.
 MAX_STUDIO_BODY_BYTES = 40 * 1024 * 1024
+MAX_SETUP_BODY_BYTES = 16 * 1024
 
 
 class NoCacheStaticFiles(StaticFiles):
@@ -46,6 +47,7 @@ async def lifespan(app: FastAPI):
     # for the operator PIN before exposing settings again.
     app.state.admin_tokens = set()
     app.state.template_pairings = {}
+    app.state.setup_pairings = set()
     app.state.onboarding_lock = threading.Lock()
     storage = Storage()
     app.state.storage = storage
@@ -97,9 +99,12 @@ def lan_request_allowed(host: str, path: str) -> bool:
         "/studio.html",
         "/css/studio.css",
         "/js/studio.js",
+        "/setup.html",
+        "/css/setup.css",
+        "/js/setup.js",
         "/assets/piccie-wordmark.svg",
     }
-    prefixes = ("/fonts/", "/api/studio/")
+    prefixes = ("/fonts/", "/api/studio/", "/api/setup/")
     return path in exact or path.startswith(prefixes)
 
 
@@ -121,6 +126,16 @@ async def restrict_lan_surface(request, call_next):
             not length.isdigit() or int(length) > MAX_STUDIO_BODY_BYTES
         ):
             return JSONResponse({"detail": "This template is too large to install."}, status_code=413)
+    if path.startswith("/api/setup/") and not _local_client(host):
+        if request.headers.get("X-Setup-Code", "") not in getattr(
+            request.app.state, "setup_pairings", set()
+        ):
+            return JSONResponse({"detail": SETUP_LINK_INACTIVE}, status_code=401)
+        length = request.headers.get("content-length", "")
+        if request.method not in ("GET", "HEAD") and (
+            not length.isdigit() or int(length) > MAX_SETUP_BODY_BYTES
+        ):
+            return JSONResponse({"detail": "This request is too large."}, status_code=413)
     return await call_next(request)
 
 

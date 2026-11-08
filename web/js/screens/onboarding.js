@@ -1,13 +1,16 @@
-export function renderOnboardingScreen({ app, state, render, api, escapeHtml, loadAdminData, closeOnScreenKeyboard }) {
+let setupPoll = null;
+
+export function renderOnboardingScreen({ app, state, render, api, escapeHtml, closeOnScreenKeyboard }) {
   state.onboardingStep ||= "wifi";
+  clearInterval(setupPoll);
 
   const shell = (step, title, copy, content, actions = "") => {
-    const stepNumber = { wifi: 1, storage: 2, finish: 3, booth: 3 }[step];
+    const stepNumber = { wifi: 1, phone: 2 }[step];
     app.innerHTML = `
       <div class="screen onboarding-screen">
         <header class="onboarding-header">
           <img class="onboarding-brand" src="/assets/piccie-wordmark.svg" alt="piccie" />
-          <span class="onboarding-step">Step ${stepNumber} of 3</span>
+          <span class="onboarding-step">Step ${stepNumber} of 2</span>
         </header>
         <main class="onboarding-main">
           <section class="onboarding-intro">
@@ -125,7 +128,7 @@ export function renderOnboardingScreen({ app, state, render, api, escapeHtml, lo
       if (selected?.connected) {
         closeOnScreenKeyboard();
         state.status = await api.status();
-        state.onboardingStep = "storage";
+        state.onboardingStep = "phone";
         render();
         return;
       }
@@ -149,7 +152,7 @@ export function renderOnboardingScreen({ app, state, render, api, escapeHtml, lo
           button.removeAttribute("aria-busy");
           return;
         }
-        state.onboardingStep = "storage";
+        state.onboardingStep = "phone";
         render();
       } catch (error) {
         message.className = "wifi-msg onboarding-wifi-message error";
@@ -164,98 +167,64 @@ export function renderOnboardingScreen({ app, state, render, api, escapeHtml, lo
     loadNetworks();
   };
 
-  const showStorage = () => {
-    const configured = Boolean(state.status?.r2_configured);
+  const showPhone = async () => {
     shell(
-      "storage",
-      configured ? "Cloud storage is ready" : "Cloud storage file not found",
-      configured
-        ? "Piccie securely imported the R2 settings you added to the microSD card."
-        : "Piccie needs the completed piccie-r2.txt file from the microSD boot partition.",
-      configured
-        ? `<div class="provider-card provider-card-r2 onboarding-storage-ready">
-            <span class="provider-logo">R2</span>
-            <span class="provider-copy"><strong>Cloudflare R2 connected</strong><small>The readable credential file has been removed</small></span>
-            <span class="wifi-badge">Ready</span>
-          </div>`
-        : `<div class="onboarding-storage-missing">
-            <p><strong>To finish setup:</strong></p>
-            <ol>
-              <li>Shut down Piccie.</li>
-              <li>Put the microSD card in your computer.</li>
-              <li>Open the boot drive and complete <code>piccie-r2.txt</code>.</li>
-              <li>If present, check <code>piccie-r2-status.txt</code> for the exact field to fix.</li>
-              <li>Safely eject the card, return it to Piccie and power on.</li>
-            </ol>
-            <p>The file itself contains the complete Cloudflare instructions.</p>
-          </div>`,
-      `<button class="btn btn-secondary" type="button" id="onboarding-storage-back">Back</button>
-       ${configured
-         ? '<button class="btn" type="button" id="onboarding-storage-continue">Continue</button>'
-         : '<button class="btn btn-secondary" type="button" id="onboarding-storage-retry">Check again</button><button class="btn" type="button" id="onboarding-storage-shutdown">Shut down</button>'}`,
+      "phone",
+      "Finish on your phone or computer",
+      "Connect cloud storage, an optional custom domain and the operator PIN from any phone or computer on the same Wi-Fi. Nothing else needs typing here.",
+      `<div class="onboarding-setup-link">
+          <div>
+            <p>Scan the code, or open this address in a browser:</p>
+            <code id="onboarding-setup-url">Creating a setup link…</code>
+            <p>Setup code <strong id="onboarding-setup-code"></strong></p>
+            <ul class="onboarding-checklist" aria-label="Setup progress">
+              <li id="onboarding-check-r2">Cloud storage</li>
+              <li id="onboarding-check-pin">Operator PIN</li>
+            </ul>
+          </div>
+          <img id="onboarding-setup-qr" alt="QR code to open booth setup" hidden />
+        </div>`,
+      `<button class="btn btn-secondary" type="button" id="onboarding-phone-back">Back</button>`,
     );
-    document.getElementById("onboarding-storage-back").onclick = () => {
+    document.getElementById("onboarding-phone-back").onclick = () => {
       state.onboardingStep = "wifi";
       render();
     };
-    document.getElementById("onboarding-storage-continue")?.addEventListener("click", () => {
-      state.onboardingStep = "finish";
-      render();
-    });
-    document.getElementById("onboarding-storage-retry")?.addEventListener("click", async () => {
-      state.status = await api.status();
-      render();
-    });
-    document.getElementById("onboarding-storage-shutdown")?.addEventListener("click", async (event) => {
-      event.currentTarget.disabled = true;
-      event.currentTarget.textContent = "Shutting down…";
-      await api.shutdown();
-    });
-  };
-
-  const showFinish = () => {
-    shell(
-      "finish",
-      "Finish setup",
-      "Choose the PIN used to open settings.",
-      `<form class="onboarding-fields onboarding-finish-fields" id="onboarding-finish-form" autocomplete="off">
-          <label class="field-wide">Operator PIN<input class="pin-input" name="operator_code" type="text" inputmode="numeric" data-osk-layout="pin" pattern="[0-9]{4}" minlength="4" maxlength="4" autocomplete="off" autocapitalize="none" spellcheck="false" data-1p-ignore="true" data-lpignore="true" required /><small>Use exactly 4 digits.</small></label>
-          <label class="field-wide">SSH public key <span class="field-optional">Optional</span><textarea name="ssh_authorized_key" rows="2" maxlength="1000" autocomplete="off" placeholder="ssh-ed25519 …"></textarea><small>Allows secure remote updates. A key in piccie-r2.txt is already installed; you can change it later in Settings.</small></label>
-          <p class="onboarding-submit-message field-wide" id="onboarding-submit-message" role="status"></p>
-        </form>`,
-      `<button class="btn btn-secondary" type="button" id="onboarding-finish-back">Back</button>
-       <button class="btn" type="submit" form="onboarding-finish-form" id="onboarding-finish-button">Finish setup</button>`,
-    );
-    document.getElementById("onboarding-finish-back").onclick = () => {
-      state.onboardingStep = "storage";
-      render();
+    const showProgress = (status) => {
+      document.getElementById("onboarding-check-r2")?.classList.toggle("done", Boolean(status?.r2_configured));
+      document.getElementById("onboarding-check-pin")?.classList.toggle("done", Boolean(status?.admin_pin_set));
     };
-    document.getElementById("onboarding-finish-form").onsubmit = async (event) => {
-      event.preventDefault();
-      const data = new FormData(event.currentTarget);
-      const pin = data.get("operator_code");
-      const button = document.getElementById("onboarding-finish-button");
-      const message = document.getElementById("onboarding-submit-message");
-      button.disabled = true;
-      message.className = "onboarding-submit-message field-wide";
-      message.textContent = "Checking your R2 connection…";
+    showProgress(state.status);
+    try {
+      const link = await api.createSetupLink();
+      const qr = document.getElementById("onboarding-setup-qr");
+      if (!qr) return;
+      document.getElementById("onboarding-setup-url").textContent = link.url;
+      document.getElementById("onboarding-setup-code").textContent = link.code;
+      qr.src = `/api/qr?data=${encodeURIComponent(link.link)}`;
+      qr.hidden = false;
+    } catch (error) {
+      const url = document.getElementById("onboarding-setup-url");
+      if (url) url.textContent = error.message;
+      return;
+    }
+    // The phone page finishes setup; follow along until the booth is provisioned.
+    setupPoll = setInterval(async () => {
       try {
-        await api.completeOnboarding({
-          admin_pin: pin,
-          ssh_authorized_key: data.get("ssh_authorized_key"),
-        });
-        window.location.reload();
-      } catch (error) {
-        message.className = "onboarding-submit-message field-wide error-text";
-        message.textContent = error.message;
-        button.disabled = false;
+        state.status = await api.status();
+      } catch {
+        return;
       }
-    };
+      showProgress(state.status);
+      if (!state.status.onboarding_required) {
+        clearInterval(setupPoll);
+        window.location.reload();
+      }
+    }, 2000);
   };
 
   ({
     wifi: showWifi,
-    storage: showStorage,
-    finish: showFinish,
+    phone: showPhone,
   }[state.onboardingStep] || showWifi)();
 }

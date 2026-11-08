@@ -94,20 +94,19 @@ test("kiosk secrets are masked without native password fields", () => {
   const kioskSource = `${appSource}\n${onboardingSource}\n${wifiSource}`;
 
   assert.doesNotMatch(kioskSource, /type=["']password["']/);
-  assert.match(onboardingSource, /name="operator_code"[^>]+data-osk-layout="pin"/);
   assert.match(appSource, /data-operator-pin-form/);
   assert.match(cssSource, /\.pin-input\s*\{[^}]*letter-spacing:/s);
   assert.match(cssSource, /\.masked-secret,\s*\.pin-input\s*\{[^}]*-webkit-text-security:\s*disc/s);
 });
 
-test("first-boot setup uses the SD-card R2 file and has no phone pairing flow", () => {
-  assert.match(onboardingSource, /piccie-r2\.txt/);
+test("first-boot setup asks only for Wi-Fi on the booth, then hands off to a phone", () => {
+  assert.doesNotMatch(onboardingSource, /piccie-r2\.txt|operator_code|ssh_authorized_key/);
+  assert.match(onboardingSource, /api\.createSetupLink/);
   assert.match(onboardingSource, /r2_configured/);
-  assert.doesNotMatch(onboardingSource, /pairOnboarding|onboarding-pair-qr|Continue on your phone/);
 });
 
-test("finishing setup opens the menu without a lockdown reboot", () => {
-  assert.match(onboardingSource, /await api\.completeOnboarding[\s\S]+window\.location\.reload\(\)/);
+test("finishing setup on the phone opens the booth menu without a lockdown reboot", () => {
+  assert.match(onboardingSource, /onboarding_required[\s\S]+window\.location\.reload\(\)/);
   assert.doesNotMatch(onboardingSource, /Securing your booth|Restarting…|onboardingRestartPolling/);
 });
 
@@ -143,13 +142,13 @@ test("settings preview is paced by fresh backend frames at the appliance rate", 
   assert.doesNotMatch(settingsSource, /setTimeout\(poll, 160\)/);
 });
 
-test("settings expose editable PIN and SSH access without password fields", () => {
+test("settings keep the PIN on the booth and open cloud and SSH settings on a phone", () => {
   assert.match(settingsSource, /Operator access/);
   assert.match(settingsSource, /id="new-operator-pin"[^>]+data-osk-layout="pin"/);
   assert.match(settingsSource, /id="confirm-operator-pin"[^>]+data-osk-layout="pin"/);
-  assert.match(settingsSource, /id="ssh-authorized-key"/);
+  assert.doesNotMatch(settingsSource, /ssh-authorized-key|updateSshAuthorizedKey/);
   assert.match(settingsSource, /api\.updateOperatorPin/);
-  assert.match(settingsSource, /api\.updateSshAuthorizedKey/);
+  assert.match(settingsSource, /api\.createSetupLink[\s\S]+api\.revokeSetupLink/);
   assert.match(settingsSource, /id="new-operator-pin"[^>]+maxlength="4"/);
   assert.match(settingsSource, /Use exactly 4 digits/);
   assert.doesNotMatch(settingsSource, /type=["']password["']/);

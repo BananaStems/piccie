@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta name="referrer" content="no-referrer" />
+  <meta http-equiv="Content-Security-Policy"
+    content="default-src 'self'; connect-src 'self'; font-src 'self'; img-src 'self'; script-src 'self'; style-src 'self'; base-uri 'none'; form-action 'self'" />
+  <title>Set up Piccie</title>
+  <link rel="stylesheet" href="/css/setup.css" />
+</head>
+<body>
+  <main class="setup-shell">
+    <header class="setup-header">
+      <img src="/assets/piccie-wordmark.svg" alt="Piccie" />
+      <span id="setup-mode-label">Booth setup</span>
+    </header>
+
+    <section class="setup-card" id="code-card" hidden>
+      <h1>Connect to your booth</h1>
+      <p>Enter the code shown on the booth's screen.</p>
+      <form id="code-form" class="stack" autocomplete="off">
+        <label>Setup code
+          <input id="code-input" name="code" autocapitalize="none" autocomplete="off" spellcheck="false"
+            placeholder="abcd-efgh" maxlength="12" required />
+        </label>
+        <p class="form-message" id="code-message" role="status"></p>
+        <button class="primary" type="submit">Continue</button>
+      </form>
+    </section>
+
+    <section class="setup-card" id="loading-card">
+      <div class="spinner" aria-hidden="true"></div>
+      <p role="status">Connecting to your booth…</p>
+    </section>
+
+    <div id="setup-sections" hidden>
+      <section class="setup-intro">
+        <h1 id="setup-title">Finish setting up your booth</h1>
+        <p id="setup-subtitle">Connected to the booth on <strong id="setup-wifi"></strong>. Everything you enter here goes straight to the booth.</p>
+      </section>
+
+      <section class="setup-card" id="r2-card">
+        <div class="card-head">
+          <h2><span class="step-number">1</span> Cloud storage</h2>
+          <span class="status-pill" id="r2-status">Not connected</span>
+        </div>
+        <p>Photos upload to a private Cloudflare R2 bucket in your own account. Guests download them from there, so they never join the booth's Wi-Fi.</p>
+        <details class="how-to" id="r2-help" open>
+          <summary>How to get these details</summary>
+          <ol>
+            <li>Sign in to the <a href="https://dash.cloudflare.com/" target="_blank" rel="noopener noreferrer">Cloudflare dashboard</a> and open <strong>Storage &amp; databases → R2</strong>.</li>
+            <li>Create a bucket named <code>piccie-photos</code>. Leave it private.</li>
+            <li>Planning a custom domain (step 2)? Also create <code>piccie-links</code> now, so one token can cover both buckets.</li>
+            <li>On the R2 Overview page, find <strong>Account Details → API Tokens</strong> and select <strong>Manage</strong>.</li>
+            <li>Create an <strong>Account API token</strong> with <strong>Object Read &amp; Write</strong>, applied only to the bucket(s) above.</li>
+            <li>Copy the Account ID, Access Key ID and Secret Access Key below. Cloudflare shows the secret only once.</li>
+          </ol>
+        </details>
+        <form id="r2-form" class="grid-form" autocomplete="off">
+          <label class="field-wide">Account ID
+            <input name="account_id" autocapitalize="none" spellcheck="false" maxlength="64" required />
+          </label>
+          <label class="field-wide">Access Key ID
+            <input name="access_key_id" autocapitalize="none" spellcheck="false" maxlength="256" required />
+          </label>
+          <label class="field-wide">Secret Access Key
+            <span class="secret-field">
+              <input name="secret_access_key" type="password" autocapitalize="none" spellcheck="false" maxlength="256" required />
+              <button type="button" data-toggle-secret>Show</button>
+            </span>
+          </label>
+          <label>Bucket
+            <input name="bucket" value="piccie-photos" autocapitalize="none" spellcheck="false" maxlength="63" required />
+          </label>
+          <label>Jurisdiction
+            <select name="jurisdiction">
+              <option value="default">Default</option>
+              <option value="eu">EU</option>
+              <option value="fedramp">FedRAMP</option>
+            </select>
+          </label>
+          <p class="form-message" id="r2-message" role="status"></p>
+          <button class="primary" type="submit">Test and save</button>
+        </form>
+      </section>
+
+      <section class="setup-card" id="domain-card">
+        <div class="card-head">
+          <h2><span class="step-number">2</span> Custom domain <span class="optional">Optional</span></h2>
+          <span class="status-pill" id="domain-status">Off</span>
+        </div>
+        <p>Without a domain, guest links are long and last 7 days, so the QR code on screen is dense. Your own domain makes short links (a smaller, easier QR code) that don't expire. A domain costs about $5–10 a year.</p>
+        <details class="how-to">
+          <summary>How to connect a domain</summary>
+          <ol>
+            <li>In Cloudflare, open <strong>Domain Registration → Register Domains</strong> and buy a domain. It must be in the same Cloudflare account as your buckets. A domain bought elsewhere works after you move its DNS to Cloudflare.</li>
+            <li>Create a second bucket, such as <code>piccie-links</code>. Never connect a domain to <code>piccie-photos</code>.</li>
+            <li>Open <strong>R2 → piccie-links → Settings → Custom Domains</strong>, select <strong>Add</strong>, enter the domain or a subdomain such as <code>photos.example.com</code>, and wait until it shows <strong>Active</strong>.</li>
+            <li>Your R2 token must cover both buckets. If it only covers <code>piccie-photos</code>, create a new one and replace the keys in step 1.</li>
+          </ol>
+          <p>Piccie checks that the domain serves only <code>piccie-links</code> before turning it on. Photos there get random names that can't be guessed, and deleting a strip or event on the booth removes them. Avoid spam-heavy endings such as <code>.bid</code> or <code>.win</code>; phones and venue networks often block them.</p>
+        </details>
+        <form id="domain-form" class="grid-form" autocomplete="off">
+          <label>Domain
+            <input name="public_domain" inputmode="url" autocapitalize="none" spellcheck="false" placeholder="piccie.link" maxlength="300" />
+          </label>
+          <label>Public bucket
+            <input name="public_bucket" value="piccie-links" autocapitalize="none" spellcheck="false" maxlength="63" />
+          </label>
+          <p class="form-message" id="domain-message" role="status"></p>
+          <div class="button-row">
+            <button class="secondary" type="button" id="domain-off" hidden>Turn off</button>
+            <button class="primary" type="submit">Test and save</button>
+          </div>
+        </form>
+      </section>
+
+      <section class="setup-card" id="access-card">
+        <div class="card-head">
+          <h2><span class="step-number">3</span> <span id="access-title">Finish setup</span></h2>
+        </div>
+        <form id="access-form" class="grid-form" autocomplete="off">
+          <label class="pin-field" id="pin-field">Operator PIN
+            <input name="admin_pin" type="password" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" autocomplete="new-password" />
+            <small>4 digits. Opens the menu and settings on the booth.</small>
+          </label>
+          <label class="pin-field" id="pin-confirm-field">Confirm PIN
+            <input name="admin_pin_confirm" type="password" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" autocomplete="new-password" />
+          </label>
+          <label class="field-wide">SSH public key <span class="optional">Optional</span>
+            <textarea name="ssh_authorized_key" rows="3" maxlength="1000" autocapitalize="none" spellcheck="false" placeholder="ssh-ed25519 AAAA… piccie"></textarea>
+            <small>For updates over the network. On your computer, run <code>ssh-keygen -t ed25519 -f ~/.ssh/piccie_ed25519 -C piccie</code> and paste the contents of <code>~/.ssh/piccie_ed25519.pub</code>. Never paste the private key.</small>
+          </label>
+          <p class="form-message" id="access-message" role="status"></p>
+          <button class="primary" type="submit" id="access-submit">Finish setup</button>
+        </form>
+      </section>
+    </div>
+
+    <section class="setup-card setup-result" id="done-card" hidden>
+      <div class="result-mark" aria-hidden="true">✓</div>
+      <h1>Your booth is ready</h1>
+      <p>The booth now shows its menu. You can close this page.</p>
+    </section>
+  </main>
+  <script src="/js/setup.js"></script>
+</body>
+</html>

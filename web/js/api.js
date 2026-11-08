@@ -75,12 +75,8 @@ export const api = {
       body: JSON.stringify({ ssid, password, hidden }),
       timeoutMs: 420000,
     }),
-  completeOnboarding: (data) =>
-    request("/onboarding/complete", {
-      method: "POST",
-      body: JSON.stringify(data),
-      timeoutMs: 420000,
-    }),
+  createSetupLink: () => request("/setup-link", { method: "POST" }),
+  revokeSetupLink: () => request("/setup-link", { method: "DELETE" }),
   preflight: () => request("/admin/preflight", { method: "POST", timeoutMs: 420000 }),
   getCameraSettings: () => request("/settings/camera"),
   updateCameraSettings: (patch) =>
@@ -98,11 +94,6 @@ export const api = {
     adminToken = result.token;
     return result;
   },
-  updateSshAuthorizedKey: (sshAuthorizedKey) =>
-    request("/settings/access/ssh", {
-      method: "PUT",
-      body: JSON.stringify({ ssh_authorized_key: sshAuthorizedKey }),
-    }),
   shutdown: () => request("/system/shutdown", { method: "POST" }),
   startSession: (eventId) =>
     request(`/events/${eventId}/sessions`, { method: "POST", timeoutMs: 20000 }),

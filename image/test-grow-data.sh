@@ -445,22 +445,6 @@ test_safe_shutdown_uses_narrow_privileged_helper() {
   assert_not_contains "${sudoers}" "/usr/bin/systemctl"
 }
 
-test_r2_boot_file_is_imported_before_engine_start() {
-  local setup="${REPO_ROOT}/image/setup-appliance.sh"
-  local engine_unit="${REPO_ROOT}/image/piccie-engine.service"
-  local template="${REPO_ROOT}/image/files/piccie-r2.txt"
-
-  assert_contains "${setup}" "/boot/firmware/piccie-r2.txt"
-  assert_contains "${setup}" "! -e /boot/firmware/piccie-r2.txt"
-  assert_contains "${engine_unit}" "ExecStartPre=+/opt/piccie/venv/bin/python -m engine.r2_boot_config"
-  assert_contains "${template}" "ACCOUNT_ID="
-  assert_contains "${template}" "ACCESS_KEY_ID="
-  assert_contains "${template}" "SECRET_ACCESS_KEY="
-  assert_contains "${template}" "BUCKET_NAME=piccie-photos"
-  assert_contains "${template}" "Object Read & Write"
-  assert_not_contains "${template}" "PUBLIC_URL="
-}
-
 test_recovery_and_release_contracts_are_baked_into_image() {
   local setup="${REPO_ROOT}/image/setup-appliance.sh"
   local smoke="${REPO_ROOT}/image/smoke-qemu.sh"
@@ -505,7 +489,6 @@ run_test test_filesystem_resize_must_verify
 run_test test_systemd_ordering_keeps_growth_offline
 run_test test_root_is_readonly_without_runtime_boot_mutation
 run_test test_safe_shutdown_uses_narrow_privileged_helper
-run_test test_r2_boot_file_is_imported_before_engine_start
 run_test test_recovery_and_release_contracts_are_baked_into_image
 
 echo "PASS: ${PASS_COUNT} piccie-grow-data tests"

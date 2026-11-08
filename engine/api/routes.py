@@ -4,15 +4,18 @@ import asyncio
 import io
 import logging
 import os
+import re
 import secrets
 import socket
 import tempfile
 import threading
 import zipfile
 from contextlib import contextmanager
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 
+from botocore.exceptions import ClientError, EndpointConnectionError, SSLError
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, Response, StreamingResponse
 
@@ -27,6 +30,8 @@ from engine.api.schemas import (
     EventShareResponse,
     OnboardingCompleteRequest,
     PerformanceSettingsRequest,
+    SetupDomainRequest,
+    SetupR2Request,
     SessionResponse,
     StatusResponse,
     SshAuthorizedKeyRequest,
@@ -44,7 +49,7 @@ from engine.composer import (
     render_strip_preview_jpeg,
     strip_dimensions,
 )
-from engine.config import AppConfig, ConfigStore
+from engine.config import AppConfig, ConfigStore, R2Config
 from engine.paths import r2_named_strip_stem
 from engine.performance import (
     DEVICE_OPTIONS,
@@ -54,8 +59,8 @@ from engine.performance import (
     performance_available,
 )
 from engine.power import schedule_poweroff
-from engine.provisioning import provision_booth
-from engine.r2 import R2Uploader, signed_url_expiring
+from engine.provisioning import _r2_probe, provision_booth
+from engine.r2 import R2Uploader, link_outdated
 from engine.storage import data_degraded, disk_free_mb, disk_low
 from engine.ssh_access import read_authorized_key, set_authorized_key
 from engine.template_packages import GOOGLE_FONTS, install_template
@@ -66,6 +71,11 @@ from engine.wifi import connect_network, current_ssid, list_networks
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api")
 STUDIO_LINK_INACTIVE = "This Studio link is no longer active. Create a new one on the booth."
+SETUP_LINK_INACTIVE = "This setup link is no longer active. Use the code shown on the booth."
+# No 0/o/1/l/i: the code is typed from the booth screen on a laptop.
+SETUP_CODE_ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789"
+BUCKET_PATTERN = re.compile(r"[a-z0-9][a-z0-9-]{1,61}[a-z0-9]")
+DOMAIN_PATTERN = re.compile(r"(?=.{4,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}")
 # A publish can upload for minutes. Held by publish, disable, clear and delete,
 # so a kiosk retry cannot mint a second link, and a publish that finishes later
 # cannot revive a gallery the organiser just cleared, deleted or disabled.
@@ -113,6 +123,18 @@ def _require_studio(request: Request) -> None:
         raise HTTPException(401, STUDIO_LINK_INACTIVE)
 
 
+def _setup_pairings(request: Request) -> set[str]:
+    pairings = getattr(request.app.state, "setup_pairings", None)
+    if pairings is None:
+        pairings = request.app.state.setup_pairings = set()
+    return pairings
+
+
+def _require_setup(request: Request) -> None:
+    if request.headers.get("X-Setup-Code", "") not in _setup_pairings(request):
+        raise HTTPException(401, SETUP_LINK_INACTIVE)
+
+
 def _onboarding_data_dir() -> Path:
     return Path(os.environ.get("PICCIE_ONBOARDING_DATA_DIR", "/data"))
 
@@ -145,11 +167,7 @@ def _complete_onboarding(request: Request, body: OnboardingCompleteRequest) -> d
         if not ssid:
             raise HTTPException(400, "Connect the booth to Wi-Fi first.")
         if not store.r2_from_local():
-            raise HTTPException(
-                400,
-                "R2 settings were not found. Shut down Piccie and complete "
-                "piccie-r2.txt on the microSD boot partition.",
-            )
+            raise HTTPException(400, "Connect Cloudflare R2 first.")
         check_cloud = getattr(request.app.state.upload_queue, "check_cloud_health", None)
         reachable, cloud_error = (
             check_cloud() if check_cloud else (False, "Cloud readiness check unavailable.")
@@ -162,7 +180,16 @@ def _complete_onboarding(request: Request, body: OnboardingCompleteRequest) -> d
             provision_booth(payload, data_dir=data_dir, store=store)
         except Exception as exc:
             raise HTTPException(400, str(exc) or "Could not connect to R2.") from exc
+        _setup_pairings(request).clear()
     return {"ok": True, "restarting": False}
+
+
+def _onboarding_required() -> bool:
+    return (
+        not appliance_qemu()
+        and os.environ.get("PICCIE_ONBOARDING") == "1"
+        and _onboarding_pending()
+    )
 
 
 @router.get("/status", response_model=StatusResponse)
@@ -184,14 +211,7 @@ def status(request: Request) -> StatusResponse:
         active_event_id=config.active_event_id,
         admin_pin_set=config.admin_pin_set,
         r2_configured=config.r2 is not None,
-        onboarding_required=(
-            not appliance_qemu()
-            and os.environ.get("PICCIE_ONBOARDING") == "1"
-            and not (
-                Path(os.environ.get("PICCIE_ONBOARDING_DATA_DIR", "/data"))
-                / ".provisioned"
-            ).exists()
-        ),
+        onboarding_required=_onboarding_required(),
         disk_free_mb=disk_free_mb(),
         disk_low=disk_low(),
         data_degraded=data_degraded(),
@@ -247,15 +267,6 @@ def update_admin_pin(request: Request, body: AdminPinUpdateRequest) -> dict:
     request.app.state.admin_tokens.clear()
     request.app.state.admin_tokens.add(token)
     return {"ok": True, "token": token}
-
-
-@router.put("/settings/access/ssh")
-def update_ssh_authorized_key(
-    request: Request, body: SshAuthorizedKeyRequest
-) -> dict:
-    _require_admin(request)
-    key = set_authorized_key(body.ssh_authorized_key)
-    return {"ok": True, "ssh_key_configured": bool(key)}
 
 
 @router.get("/wifi/networks", response_model=list[WifiNetworkResponse])
@@ -361,8 +372,156 @@ def admin_preflight(request: Request) -> dict:
     }
 
 
-@router.post("/onboarding/complete")
-def onboarding_complete(request: Request, body: OnboardingCompleteRequest) -> dict:
+@router.post("/setup-link")
+def create_setup_link(request: Request) -> dict:
+    """Kiosk-only: show the code that lets a phone or laptop open the setup page."""
+    _require_admin(request)
+    pairings = _setup_pairings(request)
+    # Reuse the live code so a kiosk reload does not break a page already open.
+    code = next(iter(pairings), None) or "-".join(
+        "".join(secrets.choice(SETUP_CODE_ALPHABET) for _ in range(4)) for _ in range(2)
+    )
+    pairings.clear()
+    pairings.add(code)
+    url = f"http://{_lan_ip()}:8080/setup.html"
+    return {"url": url, "code": code, "link": f"{url}#{code}"}
+
+
+@router.delete("/setup-link", status_code=204)
+def revoke_setup_link(request: Request) -> Response:
+    _require_admin(request)
+    _setup_pairings(request).clear()
+    return Response(status_code=204)
+
+
+def _setup_state(request: Request) -> dict:
+    r2 = request.app.state.config_store.r2_from_local()
+    return {
+        "onboarding": _onboarding_required(),
+        "wifi_ssid": current_ssid(),
+        "r2": (
+            {"account_id": r2.account_id, "bucket": r2.bucket, "jurisdiction": r2.jurisdiction}
+            if r2
+            else None
+        ),
+        "domain": {
+            "public_bucket": r2.public_bucket if r2 else "",
+            "public_domain": r2.public_domain if r2 else "",
+        },
+        "ssh_authorized_key": read_authorized_key(),
+    }
+
+
+def _save_r2(request: Request, r2: R2Config) -> dict:
+    request.app.state.config_store.save_r2(r2)
+    request.app.state.upload_queue.check_cloud_health_async()
+    return _setup_state(request)
+
+
+R2_SETUP_HINTS = {
+    "InvalidAccessKeyId": "Cloudflare doesn't recognise this Access Key ID.",
+    "SignatureDoesNotMatch": "The Secret Access Key doesn't match the Access Key ID.",
+    "NoSuchBucket": "That bucket doesn't exist in this Cloudflare account.",
+    "AccessDenied": "The API token isn't allowed to read and write this bucket.",
+    "Unauthorized": "The API token isn't allowed to read and write this bucket.",
+}
+
+
+def _r2_setup_error(exc: Exception) -> str:
+    if isinstance(exc, ClientError):
+        code = exc.response.get("Error", {}).get("Code", "")
+        if code in R2_SETUP_HINTS:
+            return R2_SETUP_HINTS[code]
+    if isinstance(exc, (SSLError, EndpointConnectionError)):
+        return (
+            "Couldn't reach R2 for this Account ID. Check the Account ID, the "
+            "jurisdiction and the booth's internet connection."
+        )
+    return str(exc) or type(exc).__name__
+
+
+@router.get("/setup/state")
+def setup_state(request: Request) -> dict:
+    _require_setup(request)
+    return _setup_state(request)
+
+
+@router.post("/setup/r2")
+def setup_r2(request: Request, body: SetupR2Request) -> dict:
+    _require_setup(request)
+    values = {key: value.strip() for key, value in body.model_dump().items()}
+    jurisdiction = values["jurisdiction"].lower() or "default"
+    if not re.fullmatch(r"[0-9a-fA-F]{32}", values["account_id"]):
+        raise HTTPException(400, "Account ID must be the 32-character Cloudflare account ID.")
+    if len(values["access_key_id"]) < 16:
+        raise HTTPException(400, "The Access Key ID is too short. Copy it again from Cloudflare.")
+    if len(values["secret_access_key"]) < 32:
+        raise HTTPException(400, "The Secret Access Key is too short. Copy it again from Cloudflare.")
+    if not BUCKET_PATTERN.fullmatch(values["bucket"]):
+        raise HTTPException(400, "The bucket name is not a valid R2 bucket name.")
+    if jurisdiction not in {"default", "eu", "fedramp"}:
+        raise HTTPException(400, "Jurisdiction must be default, eu or fedramp.")
+    current = request.app.state.config_store.r2_from_local() or R2Config()
+    # New keys keep the domain settings; the probe below proves they cover both buckets.
+    candidate = replace(
+        current,
+        account_id=values["account_id"].lower(),
+        access_key=values["access_key_id"],
+        secret_key=values["secret_access_key"],
+        bucket=values["bucket"],
+        jurisdiction=jurisdiction,
+    )
+    try:
+        _r2_probe(candidate)
+    except Exception as exc:  # noqa: BLE001 - shown to the person setting up
+        raise HTTPException(400, _r2_setup_error(exc)) from exc
+    return _save_r2(request, candidate)
+
+
+@router.post("/setup/domain")
+def setup_domain(request: Request, body: SetupDomainRequest) -> dict:
+    _require_setup(request)
+    r2 = request.app.state.config_store.r2_from_local()
+    if not r2:
+        raise HTTPException(400, "Connect Cloudflare R2 first.")
+    domain = body.public_domain.strip().lower().removeprefix("https://").removeprefix("http://").strip("/")
+    if not domain:
+        # Keep the bucket and secret so deletions still clean up public copies.
+        return _save_r2(request, replace(r2, public_domain=""))
+    public_bucket = body.public_bucket.strip()
+    if not DOMAIN_PATTERN.fullmatch(domain):
+        raise HTTPException(400, "Enter a domain such as piccie.link or photos.example.com.")
+    if not BUCKET_PATTERN.fullmatch(public_bucket):
+        raise HTTPException(400, "The public bucket name is not a valid R2 bucket name.")
+    if public_bucket == r2.bucket:
+        raise HTTPException(
+            400, "Use a second bucket for the domain. The photo bucket must stay private."
+        )
+    # shortcut: copies left in a previous public bucket are no longer cleaned up;
+    # delete that bucket in Cloudflare if you switch.
+    candidate = replace(
+        r2,
+        public_bucket=public_bucket,
+        public_domain=domain,
+        link_secret=r2.link_secret or secrets.token_urlsafe(32),
+    )
+    try:
+        R2Uploader(candidate).check_public_domain()
+    except Exception as exc:  # noqa: BLE001 - shown to the person setting up
+        raise HTTPException(400, _r2_setup_error(exc)) from exc
+    return _save_r2(request, candidate)
+
+
+@router.post("/setup/ssh")
+def setup_ssh(request: Request, body: SshAuthorizedKeyRequest) -> dict:
+    _require_setup(request)
+    set_authorized_key(body.ssh_authorized_key)
+    return _setup_state(request)
+
+
+@router.post("/setup/finish")
+def setup_finish(request: Request, body: OnboardingCompleteRequest) -> dict:
+    _require_setup(request)
     return _complete_onboarding(request, body)
 
 
@@ -561,11 +720,15 @@ def _publish_event(request: Request, event_id: str, regenerate: bool) -> EventSh
         event = storage.get_event(event_id)
         if not event:
             raise HTTPException(404, "Event not found")
-        # Signed links last 7 days; rebuild a gallery about to expire instead of
-        # showing a dead link as ready.
-        if event.share_url and not regenerate and not signed_url_expiring(event.share_url):
-            return EventShareResponse(enabled=True, url=event.share_url)
         config = _ready_config(request)
+        # Signed links last 7 days; rebuild a gallery about to expire, or one made
+        # before the custom domain changed, instead of showing a dead link as ready.
+        if (
+            event.share_url
+            and not regenerate
+            and not link_outdated(event.share_url, config.r2.public_domain if config.r2 else "")
+        ):
+            return EventShareResponse(enabled=True, url=event.share_url)
         if not config.r2:
             raise HTTPException(400, "Cloud storage is not configured.")
         _publish_progress.update(event_id=event.id, stage="packing", done=0, total=0)

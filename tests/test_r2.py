@@ -1,3 +1,5 @@
+import re
+import urllib.error
 from unittest.mock import MagicMock
 
 import pytest
@@ -14,7 +16,7 @@ from engine.paths import (
     r2_named_session_target,
     r2_named_strip_key,
 )
-from engine.r2 import R2Uploader, signed_url_expiring
+from engine.r2 import R2Uploader, link_outdated, signed_url_expiring
 
 
 class Response:
@@ -27,7 +29,7 @@ class Response:
     def __exit__(self, *_args):
         return False
 
-    def read(self):
+    def read(self, _size=-1):
         return self.body
 
 
@@ -231,13 +233,11 @@ def test_publish_named_event_uses_readable_folder_and_lists_new_strips(tmp_path)
 
 
 def test_gallery_html_escapes_event_text_and_does_not_embed_credentials():
-    uploader = uploader_with_mock_client()
-    uploader.client.list_objects_v2.return_value = {"Contents": []}
-
-    page = uploader._gallery_html(
-        "11111111-1111-4111-8111-111111111111",
+    page = R2Uploader._gallery_html(
         '<script>alert("x")</script>',
         "2026-06-14",
+        [],
+        "https://signed.example/archive.zip",
     ).decode()
 
     assert "<script>" not in page
@@ -246,7 +246,7 @@ def test_gallery_html_escapes_event_text_and_does_not_embed_credentials():
     assert "access_key" not in page
 
 
-def test_gallery_html_lists_every_paginated_strip():
+def test_event_strip_listing_follows_every_page():
     uploader = uploader_with_mock_client()
     event = "11111111-1111-4111-8111-111111111111"
     first = r2_event_strip_key(
@@ -267,10 +267,7 @@ def test_gallery_html_lists_every_paginated_strip():
         },
     ]
 
-    page = uploader._gallery_html(event, "Wedding", "2026-06-14").decode()
-
-    assert first in page
-    assert second in page
+    assert uploader._event_strip_keys(event, None) == [first, second]
     assert uploader.client.list_objects_v2.call_args_list[1].kwargs[
         "ContinuationToken"
     ] == "next-page"
@@ -443,3 +440,174 @@ def test_real_presigned_url_is_fresh():
     url = R2Uploader(R2Config("acct", "key", "secret", "photos")).download_url("k")
     assert "X-Amz-Date=" in url and not signed_url_expiring(url)
 
+
+
+def public_uploader(domain="piccie.link"):
+    uploader = R2Uploader(
+        R2Config(
+            "acct",
+            "key",
+            "secret",
+            "photos",
+            public_bucket="piccie-links",
+            public_domain=domain,
+            link_secret="test-link-secret",
+        )
+    )
+    uploader.client = MagicMock()
+    uploader.client.generate_presigned_url.side_effect = (
+        lambda _operation, Params, ExpiresIn: f"https://signed.example/{Params['Key']}"
+    )
+    return uploader
+
+
+NAMED_TARGET = r2_named_session_target(
+    "11111111-1111-4111-8111-111111111111",
+    "22222222-2222-4222-8222-222222222222",
+    "sarah-james-2026-06-14",
+    "sarah-james-strip-00001",
+)
+
+
+def test_custom_domain_guest_link_is_short_and_unguessable(tmp_path):
+    uploader = public_uploader()
+    for name in ("strip.jpg", "photo-1.jpg", "photo-2.jpg", "photo-3.jpg"):
+        (tmp_path / name).write_bytes(b"jpeg")
+
+    url = uploader.upload_session(
+        tmp_path,
+        "11111111-1111-4111-8111-111111111111",
+        "22222222-2222-4222-8222-222222222222",
+        cloud_target=NAMED_TARGET,
+    )
+
+    assert re.fullmatch(r"https://piccie\.link/[\w-]{6}/[\w-]{10}", url)
+    assert len(url) <= 42  # fits a 29x29 QR code
+    copy = uploader.client.copy_object.call_args.kwargs
+    assert copy["Bucket"] == "piccie-links"
+    assert copy["CopySource"] == {
+        "Bucket": "photos",
+        "Key": "sarah-james-2026-06-14/strips/sarah-james-strip-00001.jpg",
+    }
+    assert copy["Key"] == url.removeprefix("https://piccie.link/") + ".jpg"
+    page = uploader.client.put_object.call_args.kwargs
+    assert page["Bucket"] == "piccie-links"
+    assert page["Key"] == url.removeprefix("https://piccie.link/")
+    assert page["CacheControl"] == "private"
+    assert f"{url}.jpg" in page["Body"].decode()
+    # Readable names and signed private links never reach the public bucket.
+    assert "sarah" not in url
+    assert "signed.example" not in page["Body"].decode()
+
+
+def test_deleting_a_strip_removes_its_public_copy_even_after_domain_is_off(tmp_path):
+    (tmp_path / "strip.jpg").write_bytes(b"jpeg")
+    for name in ("photo-1.jpg", "photo-2.jpg", "photo-3.jpg"):
+        (tmp_path / name).write_bytes(b"jpeg")
+    url = public_uploader().upload_session(
+        tmp_path,
+        "11111111-1111-4111-8111-111111111111",
+        "22222222-2222-4222-8222-222222222222",
+        cloud_target=NAMED_TARGET,
+    )
+    public_key = url.removeprefix("https://piccie.link/")
+    uploader = public_uploader(domain="")
+    uploader.client.list_objects_v2.return_value = {"Contents": [], "IsTruncated": False}
+
+    uploader.delete_target(NAMED_TARGET)
+
+    public_deletes = [
+        call.kwargs["Key"]
+        for call in uploader.client.delete_object.call_args_list
+        if call.kwargs["Bucket"] == "piccie-links"
+    ]
+    assert public_deletes == [public_key, f"{public_key}.jpg"]
+
+
+def test_deleting_an_event_removes_its_public_prefix():
+    uploader = public_uploader()
+    uploader.client.list_objects_v2.return_value = {
+        "Contents": [{"Key": "abc123/page"}],
+        "IsTruncated": False,
+    }
+
+    uploader.delete_target("named-event:11111111-1111-4111-8111-111111111111:wedding-2026-06-14")
+
+    buckets = [call.kwargs["Bucket"] for call in uploader.client.delete_objects.call_args_list]
+    assert buckets == ["photos", "piccie-links"]
+    public_prefix = uploader.client.list_objects_v2.call_args_list[1].kwargs["Prefix"]
+    assert re.fullmatch(r"[\w-]{6}/", public_prefix)
+
+
+def test_custom_domain_event_gallery_and_zip_are_public_copies(tmp_path):
+    uploader = public_uploader()
+    strip = "wedding-2026-06-14/strips/wedding-strip-00001.jpg"
+    uploader.client.list_objects_v2.side_effect = [
+        {"Contents": [{"Key": strip}], "IsTruncated": False},
+        {"Contents": [], "IsTruncated": False},
+    ]
+    archive = tmp_path / "all.zip"
+    archive.write_bytes(b"zip")
+    event = "11111111-1111-4111-8111-111111111111"
+
+    url, token = uploader.publish_event(
+        event, "Wedding", "2026-06-14", archive, event_folder="wedding-2026-06-14"
+    )
+
+    assert url.startswith("https://piccie.link/")
+    copies = {call.kwargs["CopySource"]["Key"]: call.kwargs["Key"] for call in uploader.client.copy_object.call_args_list}
+    share_key = url.removeprefix("https://piccie.link/")
+    assert copies["wedding-2026-06-14/download-all.zip"] == f"{share_key}.zip"
+    gallery = uploader.client.put_object.call_args.kwargs
+    assert gallery["Bucket"] == "piccie-links"
+    assert f"https://piccie.link/{copies[strip]}" in gallery["Body"].decode()
+    assert "signed.example" not in gallery["Body"].decode()
+
+    uploader.disable_share(event, token)
+    public_deletes = [
+        call.kwargs["Key"]
+        for call in uploader.client.delete_object.call_args_list
+        if call.kwargs["Bucket"] == "piccie-links"
+    ]
+    assert public_deletes == [share_key, f"{share_key}.zip"]
+
+
+def _domain_check(monkeypatch, *, private_leaks):
+    uploader = public_uploader()
+    bodies = {}
+    uploader.client.put_object.side_effect = lambda **kw: bodies.__setitem__(kw["Key"], kw["Body"])
+    copied = set()
+    uploader.client.copy_object.side_effect = lambda **kw: copied.add(kw["Key"])
+
+    def fake_urlopen(request, timeout):
+        key = request.full_url.removeprefix("https://piccie.link/")
+        if key in copied or private_leaks:
+            return Response(bodies[key])
+        raise urllib.error.HTTPError(request.full_url, 404, "Not Found", {}, None)
+
+    monkeypatch.setattr("engine.r2.urllib.request.urlopen", fake_urlopen)
+    return uploader
+
+
+def test_domain_check_passes_when_only_the_public_bucket_is_served(monkeypatch):
+    uploader = _domain_check(monkeypatch, private_leaks=False)
+
+    uploader.check_public_domain()
+
+    deleted = {(c.kwargs["Bucket"], c.kwargs["Key"]) for c in uploader.client.delete_object.call_args_list}
+    assert len(deleted) == 3
+
+
+def test_domain_check_refuses_a_domain_on_the_private_bucket(monkeypatch):
+    uploader = _domain_check(monkeypatch, private_leaks=True)
+
+    with pytest.raises(RuntimeError, match="private bucket photos"):
+        uploader.check_public_domain()
+
+    assert uploader.client.delete_object.call_count == 3
+
+
+def test_link_outdated_follows_domain_changes():
+    assert link_outdated("https://piccie.link/abc/def", "piccie.link") is False
+    assert link_outdated("https://acct.r2.cloudflarestorage.com/x?X-Amz-Signature=1", "piccie.link") is True
+    assert link_outdated("https://piccie.link/abc/def", "") is True

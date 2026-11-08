@@ -5,10 +5,10 @@ steps are:
 
 1. Download the Piccie image, or build it yourself.
 2. Flash the image to a microSD card.
-3. Copy the completed one-time `piccie-r2.txt` file to the flashed card's boot
-   drive.
-4. Start the Raspberry Pi, configure Wi-Fi on its touchscreen and complete
-   onboarding.
+3. Create a Cloudflare R2 bucket and API token (and, optionally, a custom
+   domain).
+4. Start the Raspberry Pi, choose Wi-Fi on its touchscreen, then finish setup
+   from a phone or computer on the same Wi-Fi.
 5. Test the booth, then run the soak test before using it at an event.
 
 ## What you need
@@ -150,78 +150,60 @@ To continue a failed full build without starting again:
 
 Writing the image erases the selected card. Check the storage target carefully.
 
-## 3. Copy your R2 settings to the flashed card
+## 3. Prepare Cloudflare R2
 
-After Raspberry Pi Imager finishes, remove and reinsert the microSD card if its
-boot drive is not visible. The drive works on macOS, Windows and Linux. This
-step is required after every flash and must be completed before the card's first
-boot.
+Piccie uploads photos to a private bucket in your own Cloudflare account. You
+can do this now or during first boot: the booth's setup page shows the same
+steps.
 
-If you build or flash cards from a Piccie source checkout, keep a reusable
-private copy at the project root:
-
-```sh
-./image/copy-r2-to-card.sh --init
-```
-
-Fill in the generated `piccie-r2.txt` once. Git ignores this private file. After
-each flash, reinsert the card and run `./image/copy-r2-to-card.sh`. The helper
-validates the settings and copies them to the top level of an identifiable
-Raspberry Pi boot volume. If auto-detection is ambiguous, pass the volume
-explicitly, such as `./image/copy-r2-to-card.sh /Volumes/bootfs`.
-
-If you are not using the helper:
-
-1. Open the blank `piccie-r2.txt` included on the microSD boot drive, or prepare
-   a copy on your computer. The file contains the same instructions.
-2. Sign in to the [Cloudflare dashboard](https://dash.cloudflare.com/), open
+1. Sign in to the [Cloudflare dashboard](https://dash.cloudflare.com/), open
    **Storage & databases → R2**, and create a bucket named `piccie-photos`.
    Leave the bucket private.
+2. If you want a custom domain (below), also create a second bucket named
+   `piccie-links` now, so one token can cover both.
 3. On the R2 Overview page, find **Account Details → API Tokens** and select
    **Manage**.
-4. Create an **Account API token** with **Object Read & Write** permission.
-   Restrict the token to only the `piccie-photos` bucket.
-5. Copy the Account ID, Access Key ID and Secret Access Key into the matching
-   lines in `piccie-r2.txt`. Cloudflare shows the secret only once.
-6. Leave `JURISDICTION=default` unless the bucket was explicitly created in the
-   EU or FedRAMP jurisdiction.
-7. Optional but recommended for remote maintenance: generate a dedicated SSH
-   key on your computer, then put only its `.pub` contents after
-   `SSH_AUTHORIZED_KEY=`. For example, run
-   `ssh-keygen -t ed25519 -f ~/.ssh/piccie_ed25519 -C piccie-deploy`. Keep the
-   private file (`~/.ssh/piccie_ed25519`) on your computer and never copy it to
-   the card.
-8. Save or copy the completed file to the top level of the microSD boot drive,
-   replacing the blank template if necessary. Its name must be exactly
-   `piccie-r2.txt`.
-9. Confirm the file is present on the boot drive, then safely eject the
-   microSD card.
+4. Create an **Account API token** with **Object Read & Write** permission,
+   applied only to the bucket(s) above.
+5. Keep the Account ID, Access Key ID and Secret Access Key at hand. Cloudflare
+   shows the secret only once.
 
-The file should contain only these settings after the comment instructions:
+Leave the jurisdiction at **Default** unless the bucket was explicitly created
+in the EU or FedRAMP jurisdiction.
 
-```ini
-ACCOUNT_ID=your-32-character-account-id
-ACCESS_KEY_ID=your-r2-access-key-id
-SECRET_ACCESS_KEY=your-r2-secret-access-key
-BUCKET_NAME=piccie-photos
-JURISDICTION=default
-SSH_AUTHORIZED_KEY=ssh-ed25519 AAAA... piccie-deploy
-```
+Without a custom domain, Piccie creates signed guest links that work for seven
+days, which is Cloudflare's maximum. Generate a new event link from the booth if
+an older event needs to be shared again.
 
-Piccie validates and moves these values into the writable data partition before
-the engine starts, then removes the readable credential copy from the boot
-drive. It refuses incomplete files, unknown settings and degraded temporary
-storage. If validation fails, shut down and open `piccie-r2-status.txt` on the
-boot drive for the exact field to correct. The token should never grant access
-to any other bucket. To rotate credentials later, place a newly completed
-`piccie-r2.txt` on the boot drive; the next boot validates and replaces the old
-R2 settings atomically.
+### Optional: shorter links with your own domain
 
-R2 remains private. Piccie creates signed guest download links that work for
-seven days, which is Cloudflare's maximum. Generate a new event link from the
-booth if an older event needs to be shared again.
+Signed links are long, so the guest QR code is dense (73 × 73 squares). A domain
+makes links short enough for a 29 × 29 QR code, and they don't expire. A domain
+costs money every year, so this is optional.
 
-New photos use a readable event layout in R2:
+1. In Cloudflare, open **Domain Registration → Register Domains** and buy a
+   domain in the same account as your buckets. Cloudflare charges the
+   registry's price with no markup; `.uk` is about $5 a year and `.com` about
+   $10. A domain bought elsewhere works after you move its DNS to Cloudflare.
+2. Open **R2 → piccie-links → Settings → Custom Domains**, select **Add** and
+   enter the domain or a subdomain such as `photos.example.com`. Wait until it
+   shows **Active**.
+3. Never connect a domain to `piccie-photos`. A custom domain makes a bucket
+   public, and `piccie-photos` uses readable names such as
+   `sarah-james-strip-00001.jpg` that anyone could guess.
+
+During setup you enter the domain and `piccie-links`. Piccie uploads test files
+and refuses the domain unless it serves `piccie-links` and nothing from
+`piccie-photos`. With a domain on, Piccie copies each finished strip, event
+gallery and event ZIP into `piccie-links` under random names that can't be
+guessed or listed. Anyone who has a link can open it. Deleting a strip, clearing
+an event or deleting it on the booth removes the public copies too. Avoid
+spam-heavy endings such as `.bid`, `.win` or `.loan`: phones and venue networks
+often block them.
+
+### Where photos go
+
+New photos use a readable event layout in `piccie-photos`:
 
 ```text
 sarah-james-2026-06-14/
@@ -244,12 +226,6 @@ and `photos/`; individual guest QR codes still open only that guest's finished
 strip. Older UUID-based R2 objects remain valid after an upgrade and are
 removed through the existing deletion flow.
 
-Do not add a Wi-Fi name or password to `piccie-r2.txt`. Wi-Fi is a separate
-on-device setup step and is stored by the Raspberry Pi's network manager.
-The SSH public key is not secret; its matching private key is. After onboarding,
-change or remove the four-digit operator PIN and SSH key under **Settings → Operator
-access**.
-
 ## 4. Complete first boot
 
 Before powering on, connect the touchscreen, camera, active cooling and a
@@ -259,16 +235,41 @@ remove power or the card during that restart.
 
 1. Insert the flashed microSD card and power on the booth.
 2. On the Piccie touchscreen, choose the Wi-Fi network and enter its password.
-3. Confirm that Piccie found and securely imported the R2 file.
-4. Choose a four-digit operator PIN.
-5. Confirm or add your computer's SSH public key if you want remote updates and
-   access to the soak test. A key included in `piccie-r2.txt` is already
-   installed; then finish setup.
+   This is the only thing you type on the booth. The network needs internet
+   access; a venue network with a sign-in page won't work.
+3. The booth shows a QR code, an address such as
+   `http://192.168.1.145:8080/setup.html` and an eight-character setup code.
+   Scan the QR code with a phone, or open the address on a computer connected
+   to the same Wi-Fi and enter the code.
+4. On that page, enter the R2 details from step 3 and select **Test and save**.
+   Piccie uploads a test strip and downloads it through a guest link before it
+   saves anything.
+5. Optional: enter your custom domain and `piccie-links`, then select **Test and
+   save**.
+6. Choose a four-digit operator PIN. Optional but recommended for remote
+   maintenance: paste an SSH public key. To make one, run
+   `ssh-keygen -t ed25519 -f ~/.ssh/piccie_ed25519 -C piccie` on your computer
+   and paste the contents of `~/.ssh/piccie_ed25519.pub`. Never paste the
+   private key.
+7. Select **Finish setup**. The booth runs a final cloud check and opens its
+   menu by itself.
 
-Piccie uploads a temporary private strip and downloads it through a signed R2
-link before completing onboarding. The system partition is protected as
-read-only from the first boot, so completing setup does not trigger another
-restart. The menu appears immediately after the checks finish.
+The setup page talks to the booth over your local Wi-Fi without HTTPS, so
+finish setup on a network you trust, such as your home Wi-Fi. The setup code
+stops working when setup finishes or the booth restarts. The system partition is
+protected as read-only from the first boot, so completing setup does not
+trigger another restart.
+
+### Changing settings later
+
+On the booth, open **Settings → Operator access** and select **Open on phone or
+computer**. The same page lets you replace the R2 keys, turn the custom domain
+on or off, and change the SSH key. The link stops working when you close the
+code on the booth. Change the operator PIN on the booth itself, in the same
+section.
+
+Wi-Fi is never stored with the cloud settings; it is configured on the booth and
+kept by the Raspberry Pi's network manager.
 
 ## 5. Check the booth
 
@@ -292,7 +293,7 @@ Run a powered soak test after assembling the booth, changing performance mode,
 changing cooling or rebuilding the image. Eight hours is recommended before the
 first real event.
 
-From the computer whose SSH key was added during onboarding:
+From the computer whose SSH key was added during setup:
 
 ```bash
 ssh pi@piccie.local
@@ -325,8 +326,19 @@ count, reset/throttling evidence, service state and recent logs.
 
 ## Updating an installed booth
 
-If an SSH key was added during onboarding, most app and interface changes can
-be installed without reflashing:
+If an SSH key was added during setup, most app and interface changes can be
+installed without reflashing. If you made a dedicated key such as
+`~/.ssh/piccie_ed25519`, tell SSH to use it for the booth by adding this to
+`~/.ssh/config` (use the booth's IP address if `piccie.local` doesn't resolve):
+
+```text
+Host piccie.local 192.168.1.145
+  User pi
+  IdentityFile ~/.ssh/piccie_ed25519
+  IdentitiesOnly yes
+```
+
+Then deploy:
 
 ```bash
 ./scripts/deploy.sh 192.168.1.145
@@ -335,8 +347,8 @@ be installed without reflashing:
 The update switches releases atomically and rolls back if its health check
 fails. Changes to Raspberry Pi OS, Python dependencies, system services or the
 partition layout still require a rebuilt image and a reflash. SSH password
-login is disabled: the public key must already have been added during
-onboarding.
+login is disabled: the public key must already have been added on the setup
+page.
 
 ## Local development
 

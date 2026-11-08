@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import threading
 import zipfile
 from pathlib import Path
@@ -34,6 +35,9 @@ class FakeUploadQueue:
 
     def check_cloud_health(self):
         return self.cloud_health
+
+    def check_cloud_health_async(self):
+        return None
 
 
 @pytest.fixture
@@ -314,7 +318,7 @@ def test_performance_mode_requires_matching_device_and_warning(client, monkeypat
     assert app.state.config_store.ensure().performance_mode == "performance"
 
 
-def test_operator_can_update_pin_and_ssh_access_from_settings(client):
+def test_operator_can_update_pin_from_settings(client):
     test_client, app = client
     app.state.config_store.set_admin_pin("2468")
     old_token = test_client.post("/api/admin/unlock", json={"pin": "2468"}).json()["token"]
@@ -332,20 +336,6 @@ def test_operator_can_update_pin_and_ssh_access_from_settings(client):
     )
     assert invalid_pin.status_code == 422
 
-    invalid = test_client.put(
-        "/api/settings/access/ssh",
-        json={"ssh_authorized_key": "not-a-key"},
-        headers=old_headers,
-    )
-    assert invalid.status_code == 422
-    added = test_client.put(
-        "/api/settings/access/ssh",
-        json={"ssh_authorized_key": TEST_SSH_KEY},
-        headers=old_headers,
-    )
-    assert added.json() == {"ok": True, "ssh_key_configured": True}
-    assert (app.state.storage.db_path.parent / "ssh" / "authorized_keys").read_text() == TEST_SSH_KEY + "\n"
-
     changed = test_client.put(
         "/api/settings/access/pin",
         json={"pin": "8642"},
@@ -356,13 +346,6 @@ def test_operator_can_update_pin_and_ssh_access_from_settings(client):
     assert test_client.get("/api/settings/access", headers=old_headers).status_code == 401
     assert test_client.get("/api/settings/access", headers=new_headers).status_code == 200
 
-    removed = test_client.put(
-        "/api/settings/access/ssh",
-        json={"ssh_authorized_key": ""},
-        headers=new_headers,
-    )
-    assert removed.json() == {"ok": True, "ssh_key_configured": False}
-    assert not (app.state.storage.db_path.parent / "ssh" / "authorized_keys").exists()
     assert test_client.post("/api/admin/unlock", json={"pin": "2468"}).status_code == 401
     assert test_client.post("/api/admin/unlock", json={"pin": "8642"}).status_code == 200
 
@@ -467,67 +450,188 @@ def test_phone_studio_pairs_installs_and_archives_template(client, monkeypatch):
     ).status_code == 200
 
 
-def test_kiosk_onboarding_requires_imported_r2_then_finishes(client, monkeypatch, tmp_path):
+VALID_R2 = {
+    "account_id": "0123456789ABCDEF0123456789abcdef",
+    "access_key_id": "access-key-id-0001",
+    "secret_access_key": "s" * 40,
+    "bucket": "photo-strips",
+    "jurisdiction": "default",
+}
+
+
+def _phone(test_client, admin_headers=None):
+    link = test_client.post("/api/setup-link", headers=admin_headers or {})
+    assert link.status_code == 200
+    return {"X-Setup-Code": link.json()["code"]}
+
+
+def test_phone_setup_connects_r2_and_finishes_onboarding(client, monkeypatch, tmp_path):
     test_client, app = client
+    probed = []
+    monkeypatch.setattr("engine.api.routes._r2_probe", probed.append)
     monkeypatch.setattr("engine.provisioning._r2_probe", lambda _config: None)
     connection = {"ssid": None}
     monkeypatch.setattr("engine.api.routes.current_ssid", lambda: connection["ssid"])
 
-    invalid_pin = test_client.post(
-        "/api/onboarding/complete",
-        json={"admin_pin": "12345"},
-    )
+    assert test_client.get("/api/setup/state").status_code == 401
+    link = test_client.post("/api/setup-link").json()
+    assert re.fullmatch(r"[a-z2-9]{4}-[a-z2-9]{4}", link["code"])
+    assert link["link"] == f"{link['url']}#{link['code']}"
+    # A kiosk reload must keep the code an open phone page is already using.
+    assert test_client.post("/api/setup-link").json()["code"] == link["code"]
+    phone = {"X-Setup-Code": link["code"]}
+    assert test_client.get("/api/setup/state", headers={"X-Setup-Code": "wrong-code"}).status_code == 401
+    assert test_client.get("/api/setup/state", headers=phone).json()["r2"] is None
+
+    invalid_pin = test_client.post("/api/setup/finish", json={"admin_pin": "12345"}, headers=phone)
     assert invalid_pin.status_code == 422
-
-    blocked = test_client.post(
-        "/api/onboarding/complete",
-        json={"admin_pin": "2468"},
-    )
-    assert blocked.status_code == 400
-    assert "Wi-Fi first" in blocked.json()["detail"]
-
-    assert test_client.post(
-        "/api/wifi/connect",
-        json={"ssid": "Venue", "password": "venue-password", "hidden": False},
-    ).status_code == 200
+    no_wifi = test_client.post("/api/setup/finish", json={"admin_pin": "2468"}, headers=phone)
+    assert "Wi-Fi first" in no_wifi.json()["detail"]
     connection["ssid"] = "Venue"
-    missing_r2 = test_client.post(
-        "/api/onboarding/complete",
-        json={"admin_pin": "2468"},
-    )
-    assert missing_r2.status_code == 400
-    assert "piccie-r2.txt" in missing_r2.json()["detail"]
+    no_r2 = test_client.post("/api/setup/finish", json={"admin_pin": "2468"}, headers=phone)
+    assert no_r2.status_code == 400
+    assert "Connect Cloudflare R2 first" in no_r2.json()["detail"]
 
-    (tmp_path / "local.json").write_text(json.dumps({
-        "r2": {
-            "account_id": "account",
-            "access_key": "access",
-            "secret_key": "secret",
-            "bucket": "photo-strips",
-            "jurisdiction": "default",
-        }
-    }))
+    bad = test_client.post("/api/setup/r2", json={**VALID_R2, "account_id": "short"}, headers=phone)
+    assert bad.status_code == 400
+    assert "Account ID" in bad.json()["detail"]
+    assert probed == []
+
+    saved = test_client.post("/api/setup/r2", json=VALID_R2, headers=phone)
+    assert saved.status_code == 200
+    assert saved.json()["r2"] == {
+        "account_id": VALID_R2["account_id"].lower(),
+        "bucket": "photo-strips",
+        "jurisdiction": "default",
+    }
+    assert VALID_R2["secret_access_key"] not in saved.text
+    assert probed[0].secret_key == VALID_R2["secret_access_key"]
+    assert (tmp_path / "local.json").stat().st_mode & 0o777 == 0o600
     assert test_client.get("/api/status").json()["r2_configured"] is True
+
     completed = test_client.post(
-        "/api/onboarding/complete",
-        json={
-            "admin_pin": "2468",
-            "ssh_authorized_key": TEST_SSH_KEY,
-        },
+        "/api/setup/finish",
+        json={"admin_pin": "2468", "ssh_authorized_key": TEST_SSH_KEY},
+        headers=phone,
     )
     assert completed.status_code == 200
-    assert completed.json()["restarting"] is False
     assert (tmp_path / ".provisioned").exists()
-    assert not (tmp_path / ".lockdown-requested").exists()
     assert (tmp_path / "ssh" / "authorized_keys").read_text() == TEST_SSH_KEY + "\n"
     assert app.state.config_store.ensure().r2.bucket == "photo-strips"
     assert test_client.post("/api/admin/unlock", json={"pin": "2468"}).status_code == 200
+    # Finishing setup retires the code.
+    assert test_client.get("/api/setup/state", headers=phone).status_code == 401
 
 
-def test_removed_phone_setup_endpoints_are_not_exposed(client):
+def test_phone_setup_rejected_r2_keys_are_not_saved(client, monkeypatch, tmp_path):
+    test_client, _app = client
+
+    def failing_probe(_config):
+        raise RuntimeError("guest link unavailable")
+
+    monkeypatch.setattr("engine.api.routes._r2_probe", failing_probe)
+    response = test_client.post("/api/setup/r2", json=VALID_R2, headers=_phone(test_client))
+
+    assert response.status_code == 400
+    assert "guest link unavailable" in response.json()["detail"]
+    assert not (tmp_path / "local.json").exists()
+
+
+def test_phone_setup_explains_common_r2_mistakes(client, monkeypatch):
+    from botocore.exceptions import ClientError
+
+    test_client, _app = client
+
+    def wrong_secret(_config):
+        raise ClientError({"Error": {"Code": "SignatureDoesNotMatch"}}, "PutObject")
+
+    monkeypatch.setattr("engine.api.routes._r2_probe", wrong_secret)
+    response = test_client.post("/api/setup/r2", json=VALID_R2, headers=_phone(test_client))
+
+    assert response.json()["detail"] == "The Secret Access Key doesn't match the Access Key ID."
+
+
+def test_phone_setup_custom_domain_needs_a_second_bucket(client, monkeypatch, tmp_path):
+    test_client, app = client
+    phone = _phone(test_client)
+    no_r2 = test_client.post(
+        "/api/setup/domain",
+        json={"public_bucket": "piccie-links", "public_domain": "piccie.link"},
+        headers=phone,
+    )
+    assert "Connect Cloudflare R2 first" in no_r2.json()["detail"]
+    monkeypatch.setattr("engine.api.routes._r2_probe", lambda _config: None)
+    assert test_client.post("/api/setup/r2", json=VALID_R2, headers=phone).status_code == 200
+
+    same = test_client.post(
+        "/api/setup/domain",
+        json={"public_bucket": "photo-strips", "public_domain": "piccie.link"},
+        headers=phone,
+    )
+    assert same.status_code == 400
+    assert "second bucket" in same.json()["detail"]
+    bad = test_client.post(
+        "/api/setup/domain",
+        json={"public_bucket": "piccie-links", "public_domain": "not a domain"},
+        headers=phone,
+    )
+    assert bad.status_code == 400
+
+    checked = []
+    monkeypatch.setattr(
+        "engine.api.routes.R2Uploader.check_public_domain",
+        lambda self: checked.append(self.config),
+    )
+    on = test_client.post(
+        "/api/setup/domain",
+        json={"public_bucket": "piccie-links", "public_domain": "https://Piccie.link/"},
+        headers=phone,
+    )
+    assert on.status_code == 200
+    assert on.json()["domain"] == {"public_bucket": "piccie-links", "public_domain": "piccie.link"}
+    assert checked[0].public_domain == "piccie.link"
+    secret = app.state.config_store.r2_from_local().link_secret
+    assert len(secret) >= 32
+
+    off = test_client.post(
+        "/api/setup/domain",
+        json={"public_bucket": "piccie-links", "public_domain": ""},
+        headers=phone,
+    )
+    stored = app.state.config_store.r2_from_local()
+    assert off.json()["domain"]["public_domain"] == ""
+    # Kept so deleting a strip still removes its public copy.
+    assert (stored.public_bucket, stored.link_secret) == ("piccie-links", secret)
+    test_client.post(
+        "/api/setup/domain",
+        json={"public_bucket": "piccie-links", "public_domain": "piccie.link"},
+        headers=phone,
+    )
+    assert app.state.config_store.r2_from_local().link_secret == secret
+
+
+def test_phone_setup_link_needs_the_operator_pin_after_setup(client):
+    test_client, app = client
+    app.state.config_store.set_admin_pin("2468")
+    assert test_client.post("/api/setup-link").status_code == 401
+    token = test_client.post("/api/admin/unlock", json={"pin": "2468"}).json()["token"]
+    admin = {"X-Admin-Token": token}
+    phone = _phone(test_client, admin)
+
+    saved = test_client.post("/api/setup/ssh", json={"ssh_authorized_key": TEST_SSH_KEY}, headers=phone)
+    assert saved.json()["ssh_authorized_key"] == TEST_SSH_KEY
+    invalid = test_client.post("/api/setup/ssh", json={"ssh_authorized_key": "not-a-key"}, headers=phone)
+    assert invalid.status_code == 422
+
+    assert test_client.delete("/api/setup-link", headers=admin).status_code == 204
+    assert test_client.get("/api/setup/state", headers=phone).status_code == 401
+
+
+def test_removed_setup_endpoints_are_not_exposed(client):
     test_client, _app = client
     assert test_client.post("/api/onboarding/pair").status_code == 404
-    assert test_client.get("/api/setup/status").status_code == 404
+    assert test_client.post("/api/onboarding/complete", json={}).status_code == 404
+    assert test_client.put("/api/settings/access/ssh", json={}).status_code == 404
     assert test_client.post("/api/setup/complete", json={}).status_code == 404
 
 

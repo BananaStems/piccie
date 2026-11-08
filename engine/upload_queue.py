@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from engine.atomicio import jpeg_is_intact
-from engine.config import ConfigStore
+from engine.config import ConfigStore, R2Config
 from engine.paths import r2_session_target
 from engine.r2 import R2Uploader
 from engine.storage import Storage
@@ -38,7 +38,7 @@ class UploadQueue:
         ] = queue.PriorityQueue(maxsize=MAX_QUEUE_SIZE)
         self._sequence = itertools.count()
         self._uploader: R2Uploader | None = None
-        self._uploader_key: tuple[str, ...] | None = None
+        self._uploader_key: R2Config | None = None
         self._cloud_lock = threading.Lock()
         self._probe_lock = threading.Lock()
         self._cloud_reachable: bool | None = None
@@ -229,16 +229,10 @@ class UploadQueue:
     def _get_uploader(self, config) -> R2Uploader | None:
         if not config or not config.r2:
             return None
-        key = (
-            config.r2.account_id,
-            config.r2.access_key,
-            config.r2.secret_key,
-            config.r2.bucket,
-            config.r2.jurisdiction,
-        )
-        if self._uploader is None or self._uploader_key != key:
+        # Any R2 change from the setup page (keys, bucket, domain) rebuilds the client.
+        if self._uploader is None or self._uploader_key != config.r2:
             self._uploader = R2Uploader(config.r2)
-            self._uploader_key = key
+            self._uploader_key = config.r2
         return self._uploader
 
     def _worker(self) -> None:

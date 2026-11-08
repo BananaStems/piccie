@@ -20,6 +20,15 @@
         ],
         "createdAt": "2026-11-08T02:09:09.618Z",
         "reason": "Piccie brand paper colour, shared with the booth UI (web/css/app.css --bg #f2ebe3); evidence from the codebase"
+      },
+      {
+        "rule": "cream-palette",
+        "value": "*",
+        "files": [
+          "web/setup.html"
+        ],
+        "createdAt": "2026-11-08T03:35:25.157Z",
+        "reason": "project palette: web/css/app.css defines --bg #f2ebe3 and --bg-elevated #faf6f0 as the kiosk's brand surfaces; the setup page reuses them (Claude's triage, not user-confirmed)"
       }
     ]
   }

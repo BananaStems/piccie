@@ -46,6 +46,20 @@ class SshAuthorizedKeyRequest(BaseModel):
         return normalize_authorized_key(value)
 
 
+# Setup-page fields are checked in the route so errors read as plain sentences.
+class SetupR2Request(BaseModel):
+    account_id: str = Field(default="", max_length=64)
+    access_key_id: str = Field(default="", max_length=256)
+    secret_access_key: str = Field(default="", max_length=256)
+    bucket: str = Field(default="", max_length=63)
+    jurisdiction: str = Field(default="default", max_length=16)
+
+
+class SetupDomainRequest(BaseModel):
+    public_bucket: str = Field(default="", max_length=63)
+    public_domain: str = Field(default="", max_length=300)
+
+
 class ActiveEventRequest(BaseModel):
     event_id: str | None = None
 

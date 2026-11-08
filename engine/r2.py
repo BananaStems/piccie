@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
 import html
 import logging
 import re
@@ -31,6 +34,9 @@ from engine.paths import (
 logger = logging.getLogger(__name__)
 GUEST_LINK_EXPIRY_SECONDS = 7 * 24 * 60 * 60
 REFRESH_MARGIN_SECONDS = 24 * 60 * 60
+# Cloudflare blocks urllib's default User-Agent on proxied custom domains (error 1010).
+USER_AGENT = "Mozilla/5.0 (compatible; Piccie)"
+PUBLIC_CACHE_CONTROL = "private"  # no edge cache, so deletions take effect at once
 
 
 def signed_url_expiring(url: str) -> bool:
@@ -43,6 +49,13 @@ def signed_url_expiring(url: str) -> bool:
         return False  # not a presigned URL; nothing to refresh
     age = datetime.now(timezone.utc) - signed_at.replace(tzinfo=timezone.utc)
     return age.total_seconds() >= lifetime - REFRESH_MARGIN_SECONDS
+
+
+def link_outdated(url: str, public_domain: str) -> bool:
+    """True when a saved link is near expiry or predates a custom-domain change."""
+    if public_domain:
+        return not url.startswith(f"https://{public_domain}/")
+    return "X-Amz-Signature=" not in url or signed_url_expiring(url)
 
 
 class R2Uploader:
@@ -86,6 +99,51 @@ class R2Uploader:
             self._raise_clock_skew(exc)
             raise
 
+    @property
+    def _public_links(self) -> bool:
+        return bool(self.config.public_domain and self._public_cleanup)
+
+    @property
+    def _public_cleanup(self) -> bool:
+        # Keep deleting public copies after the domain is switched off.
+        return bool(self.config.public_bucket and self.config.link_secret)
+
+    def _link_id(self, value: str, length: int) -> str:
+        digest = hmac.new(
+            self.config.link_secret.encode(), value.encode(), hashlib.sha256
+        ).digest()
+        return base64.urlsafe_b64encode(digest).decode()[:length]
+
+    def _public_prefix(self, event_id: str) -> str:
+        return f"{self._link_id(f'event:{event_id}', 6)}/"
+
+    def _public_strip_key(self, event_id: str, strip_key: str) -> str:
+        """Unguessable public name for one private strip; its page drops '.jpg'."""
+        return f"{self._public_prefix(event_id)}{self._link_id(strip_key, 10)}"
+
+    def _public_share_key(self, event_id: str, token: str) -> str:
+        return f"{self._public_prefix(event_id)}{self._link_id(f'share:{token}', 12)}"
+
+    def public_url(self, key: str) -> str:
+        return f"https://{self.config.public_domain}/{key}"
+
+    def _copy_to_public(self, key: str, public_key: str, *, content_type: str) -> None:
+        self._signed_call(
+            self.client.copy_object,
+            Bucket=self.config.public_bucket,
+            Key=public_key,
+            CopySource={"Bucket": self.config.bucket, "Key": key},
+            ContentType=content_type,
+            CacheControl=PUBLIC_CACHE_CONTROL,
+            MetadataDirective="REPLACE",
+        )
+
+    def _delete_public(self, *keys: str) -> None:
+        for key in keys:
+            self._signed_call(
+                self.client.delete_object, Bucket=self.config.public_bucket, Key=key
+            )
+
     def upload_session(
         self,
         session_dir: Path,
@@ -116,6 +174,16 @@ class R2Uploader:
             strip_key = r2_event_strip_key(event_id, session_id)
             page_key = r2_event_session_page_key(event_id, session_id)
         self._upload_file(strip_local, strip_key, content_type="image/jpeg")
+        if self._public_links:
+            public_key = self._public_strip_key(event_id, strip_key)
+            self._copy_to_public(strip_key, f"{public_key}.jpg", content_type="image/jpeg")
+            self._upload_bytes(
+                self._session_html(self.public_url(f"{public_key}.jpg")),
+                public_key,
+                content_type="text/html; charset=utf-8",
+                bucket=self.config.public_bucket,
+            )
+            return self.public_url(public_key)
         strip_url = self.download_url(strip_key)
         self._upload_bytes(
             self._session_html(strip_url),
@@ -135,30 +203,53 @@ class R2Uploader:
         on_progress: Callable[[int], None] | None = None,
     ) -> tuple[str, str]:
         token = f"{event_id}.{secrets.token_urlsafe(32)}"
+        archive_key = (
+            r2_named_event_archive_key(event_folder)
+            if event_folder
+            else r2_event_archive_key(event_id)
+        )
         self._upload_file(
             archive_path,
-            (
-                r2_named_event_archive_key(event_folder)
-                if event_folder
-                else r2_event_archive_key(event_id)
-            ),
+            archive_key,
             content_type="application/zip",
             on_progress=on_progress,
         )
-        gallery_key = r2_event_gallery_key(event_id, token)
-        self._upload_bytes(
-            self._gallery_html(
-                event_id,
-                event_name,
-                event_date,
-                event_folder=event_folder,
-            ),
-            gallery_key,
-            content_type="text/html; charset=utf-8",
-        )
+        strip_keys = self._event_strip_keys(event_id, event_folder)
+        if self._public_links:
+            share_key = self._public_share_key(event_id, token)
+            self._copy_to_public(
+                archive_key, f"{share_key}.zip", content_type="application/zip"
+            )
+            strip_urls = []
+            for key in strip_keys:
+                public_key = f"{self._public_strip_key(event_id, key)}.jpg"
+                self._copy_to_public(key, public_key, content_type="image/jpeg")
+                strip_urls.append(self.public_url(public_key))
+            self._upload_bytes(
+                self._gallery_html(
+                    event_name, event_date, strip_urls, self.public_url(f"{share_key}.zip")
+                ),
+                share_key,
+                content_type="text/html; charset=utf-8",
+                bucket=self.config.public_bucket,
+            )
+            url = self.public_url(share_key)
+        else:
+            gallery_key = r2_event_gallery_key(event_id, token)
+            self._upload_bytes(
+                self._gallery_html(
+                    event_name,
+                    event_date,
+                    [self.download_url(key) for key in strip_keys],
+                    self.download_url(archive_key),
+                ),
+                gallery_key,
+                content_type="text/html; charset=utf-8",
+            )
+            url = self.download_url(gallery_key)
         if previous_token:
             self.disable_share(event_id, previous_token)
-        return self.download_url(gallery_key), token
+        return url, token
 
     def disable_share(self, event_id: str, token: str) -> None:
         self._signed_call(
@@ -166,11 +257,16 @@ class R2Uploader:
             Bucket=self.config.bucket,
             Key=r2_event_gallery_key(event_id, token),
         )
+        if self._public_cleanup:
+            share_key = self._public_share_key(event_id, token)
+            self._delete_public(share_key, f"{share_key}.zip")
 
     def delete_target(self, target: str) -> None:
         if target.startswith("named-event:"):
-            _, _event_id, event_folder = target.split(":", 2)
+            _, event_id, event_folder = target.split(":", 2)
             self._delete_prefix(f"{event_folder}/")
+            if self._public_cleanup:
+                self._delete_prefix(self._public_prefix(event_id), public=True)
             return
         if target.startswith("named-event-archive:"):
             _, _event_id, event_folder = target.split(":", 2)
@@ -194,9 +290,17 @@ class R2Uploader:
                 Key=r2_event_session_page_key(event_id, session_id),
             )
             self._delete_prefix(f"{event_folder}/photos/{strip_stem}-photo-")
+            if self._public_cleanup:
+                public_key = self._public_strip_key(
+                    event_id, r2_named_strip_key(event_folder, strip_stem)
+                )
+                self._delete_public(public_key, f"{public_key}.jpg")
             return
         if target.startswith("event:"):
-            self._delete_prefix(r2_event_prefix(target.split(":", 1)[1]))
+            event_id = target.split(":", 1)[1]
+            self._delete_prefix(r2_event_prefix(event_id))
+            if self._public_cleanup:
+                self._delete_prefix(self._public_prefix(event_id), public=True)
             return
         if target.startswith("event-content:"):
             # Only queued by clears before 1.0.11; newer clears tombstone each strip.
@@ -207,6 +311,8 @@ class R2Uploader:
                 Bucket=self.config.bucket,
                 Key=r2_event_archive_key(event_id),
             )
+            if self._public_cleanup:
+                self._delete_prefix(self._public_prefix(event_id), public=True)
             return
         if target.startswith("event-archive:"):
             event_id = target.split(":", 1)[1]
@@ -219,6 +325,11 @@ class R2Uploader:
         if target.startswith("event-session:"):
             _, event_id, session_id = target.split(":", 2)
             self._delete_prefix(f"{r2_event_prefix(event_id)}sessions/{session_id}/")
+            if self._public_cleanup:
+                public_key = self._public_strip_key(
+                    event_id, r2_event_strip_key(event_id, session_id)
+                )
+                self._delete_public(public_key, f"{public_key}.jpg")
             return
         if target.startswith("event-share:"):
             _, event_id, token = target.split(":", 2)
@@ -226,24 +337,34 @@ class R2Uploader:
             return
         raise ValueError(f"Unknown R2 deletion target: {target}")
 
-    def _delete_prefix(self, prefix: str) -> None:
+    def _list_keys(self, prefix: str, bucket: str | None = None) -> list[str]:
+        keys: list[str] = []
         continuation: str | None = None
         while True:
-            args = {"Bucket": self.config.bucket, "Prefix": prefix}
+            args = {"Bucket": bucket or self.config.bucket, "Prefix": prefix}
             if continuation:
                 args["ContinuationToken"] = continuation
             response = self._signed_call(self.client.list_objects_v2, **args)
-            objects = [{"Key": item["Key"]} for item in response.get("Contents", [])]
-            if objects:
-                self._signed_call(
-                    self.client.delete_objects,
-                    Bucket=self.config.bucket,
-                    Delete={"Objects": objects, "Quiet": True},
-                )
+            keys.extend(item["Key"] for item in response.get("Contents", []))
             if not response.get("IsTruncated"):
-                break
+                return keys
             continuation = response.get("NextContinuationToken")
-        logger.info("Deleted R2 prefix s3://%s/%s", self.config.bucket, prefix)
+            if not continuation:
+                raise RuntimeError("R2 returned an incomplete listing.")
+
+    def _delete_prefix(self, prefix: str, *, public: bool = False) -> None:
+        bucket = self.config.public_bucket if public else self.config.bucket
+        keys = self._list_keys(prefix, bucket)
+        for start in range(0, len(keys), 1000):  # S3 DeleteObjects limit
+            self._signed_call(
+                self.client.delete_objects,
+                Bucket=bucket,
+                Delete={
+                    "Objects": [{"Key": key} for key in keys[start : start + 1000]],
+                    "Quiet": True,
+                },
+            )
+        logger.info("Deleted R2 prefix s3://%s/%s", bucket, prefix)
 
     def _upload_file(
         self,
@@ -262,15 +383,20 @@ class R2Uploader:
         )
         logger.info("Uploaded %s to s3://%s/%s", path.name, self.config.bucket, key)
 
-    def _upload_bytes(self, data: bytes, key: str, *, content_type: str) -> None:
+    def _upload_bytes(
+        self, data: bytes, key: str, *, content_type: str, bucket: str | None = None
+    ) -> None:
+        extra = {"CacheControl": PUBLIC_CACHE_CONTROL} if bucket else {}
+        bucket = bucket or self.config.bucket
         self._signed_call(
             self.client.put_object,
-            Bucket=self.config.bucket,
+            Bucket=bucket,
             Key=key,
             Body=data,
             ContentType=content_type,
+            **extra,
         )
-        logger.info("Uploaded %s to s3://%s/%s", key.split("/")[-1], self.config.bucket, key)
+        logger.info("Uploaded %s to s3://%s/%s", key.split("/")[-1], bucket, key)
 
     def download_url(self, key: str) -> str:
         return self._signed_call(
@@ -358,37 +484,25 @@ box-shadow:0 7px 20px #9e3f3029}}.download:focus-visible{{outline:3px solid var(
 </script></body></html>"""
         return document.encode("utf-8")
 
-    def _gallery_html(
-        self,
-        event_id: str,
-        event_name: str,
-        event_date: str,
-        *,
-        event_folder: str | None = None,
-    ) -> bytes:
-        strip_keys: list[str] = []
+    def _event_strip_keys(self, event_id: str, event_folder: str | None) -> list[str]:
         prefixes = []
         if event_folder:
             prefixes.append((f"{event_folder}/strips/", ".jpg"))
         prefixes.append((f"{r2_event_prefix(event_id)}sessions/", "/strip.jpg"))
-        for prefix, suffix in prefixes:
-            continuation: str | None = None
-            while True:
-                args = {"Bucket": self.config.bucket, "Prefix": prefix}
-                if continuation:
-                    args["ContinuationToken"] = continuation
-                response = self._signed_call(self.client.list_objects_v2, **args)
-                strip_keys.extend(
-                    item["Key"]
-                    for item in response.get("Contents", [])
-                    if item.get("Key", "").endswith(suffix)
-                )
-                if not response.get("IsTruncated"):
-                    break
-                continuation = response.get("NextContinuationToken")
-                if not continuation:
-                    raise RuntimeError("R2 returned an incomplete event listing.")
-        strip_keys.sort()
+        return sorted(
+            key
+            for prefix, suffix in prefixes
+            for key in self._list_keys(prefix)
+            if key.endswith(suffix)
+        )
+
+    @staticmethod
+    def _gallery_html(
+        event_name: str,
+        event_date: str,
+        strip_urls: list[str],
+        archive_url: str,
+    ) -> bytes:
         title = html.escape(event_name)
         date = html.escape(event_date)
         cards = "".join(
@@ -396,19 +510,12 @@ box-shadow:0 7px 20px #9e3f3029}}.download:focus-visible{{outline:3px solid var(
                 '<a class="strip" href="{url}" download>'
                 '<img src="{url}" alt="Photo strip {number}" loading="lazy">'
                 '<span>Download strip {number}</span></a>'
-            ).format(url=html.escape(self.download_url(key), quote=True), number=index)
-            for index, key in enumerate(strip_keys, 1)
+            ).format(url=html.escape(url, quote=True), number=index)
+            for index, url in enumerate(strip_urls, 1)
         )
         if not cards:
             cards = "<p>No photo strips have uploaded yet.</p>"
-        archive_url = html.escape(
-            self.download_url(
-                r2_named_event_archive_key(event_folder)
-                if event_folder
-                else r2_event_archive_key(event_id)
-            ),
-            quote=True,
-        )
+        archive_url = html.escape(archive_url, quote=True)
         document = f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -443,7 +550,7 @@ box-shadow:0 8px 30px #47243818}}.strip img{{width:100%;height:auto;border-radiu
             try:
                 request = urllib.request.Request(
                     url,
-                    headers={"Cache-Control": "no-cache"},
+                    headers={"Cache-Control": "no-cache", "User-Agent": USER_AGENT},
                 )
                 with urllib.request.urlopen(request, timeout=10) as response:
                     body = response.read()
@@ -471,7 +578,7 @@ box-shadow:0 8px 30px #47243818}}.strip img{{width:100%;height:auto;border-radiu
                     continue
                 image_request = urllib.request.Request(
                     image_url,
-                    headers={"Cache-Control": "no-cache"},
+                    headers={"Cache-Control": "no-cache", "User-Agent": USER_AGENT},
                 )
                 with urllib.request.urlopen(image_request, timeout=10) as response:
                     if response.read() == expected:
@@ -485,5 +592,60 @@ box-shadow:0 8px 30px #47243818}}.strip img{{width:100%;height:auto;border-radiu
                 time.sleep(2)
         raise RuntimeError(
             "R2 accepted the strip, but its guest page could not return it. "
-            "Check the R2 credentials, booth clock, and venue internet access."
+            "Check the R2 credentials, booth clock, custom domain and venue internet access."
         ) from last_error
+
+    def check_public_domain(self) -> None:
+        """Prove the domain serves the public bucket, and never the private one."""
+        domain, public_bucket = self.config.public_domain, self.config.public_bucket
+        fix = (
+            f"In Cloudflare, open R2 > {public_bucket} > Settings > Custom Domains, "
+            f"check that {domain} is connected and Active, and that the API token "
+            f"can read and write both {self.config.bucket} and {public_bucket}."
+        )
+        shared = f"piccie-domain-check-{secrets.token_hex(8)}.txt"
+        private_only = f"piccie-domain-check-{secrets.token_hex(8)}.txt"
+        shared_body = secrets.token_hex(16).encode()
+        private_body = secrets.token_hex(16).encode()
+
+        def fetch(key: str) -> bytes | None:
+            request = urllib.request.Request(
+                f"https://{domain}/{key}",
+                headers={"Cache-Control": "no-cache", "User-Agent": USER_AGENT},
+            )
+            try:
+                with urllib.request.urlopen(request, timeout=10) as response:
+                    return response.read(64)
+            except urllib.error.HTTPError:
+                return None
+
+        try:
+            try:
+                self._upload_bytes(shared_body, shared, content_type="text/plain")
+                self._upload_bytes(private_body, private_only, content_type="text/plain")
+                self._copy_to_public(shared, shared, content_type="text/plain")
+            except Exception as exc:
+                raise RuntimeError(f"Could not write the test file to R2 ({exc}). {fix}") from exc
+            try:
+                served = fetch(shared)
+                leaked = fetch(private_only)
+            except OSError as exc:
+                raise RuntimeError(f"{domain} did not answer ({exc}). {fix}") from exc
+            if leaked == private_body:
+                raise RuntimeError(
+                    f"{domain} is connected to your private bucket {self.config.bucket}, "
+                    "which would make every photo public. Remove it from that bucket's "
+                    f"Custom Domains and connect it to {public_bucket} instead."
+                )
+            if served != shared_body:
+                raise RuntimeError(f"{domain} did not return the test file. {fix}")
+        finally:
+            for bucket, key in (
+                (self.config.bucket, shared),
+                (self.config.bucket, private_only),
+                (public_bucket, shared),
+            ):
+                try:
+                    self.client.delete_object(Bucket=bucket, Key=key)
+                except Exception:  # noqa: BLE001 - never hide the probe result
+                    logger.warning("Could not delete domain check file s3://%s/%s", bucket, key)

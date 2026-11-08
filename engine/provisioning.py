@@ -53,9 +53,7 @@ def provision_booth(
 ) -> None:
     """Validate storage and persist first-boot configuration."""
     if not store.r2_from_local():
-        raise ValueError(
-            "R2 settings were not imported. Complete piccie-r2.txt on the microSD card."
-        )
+        raise ValueError("Connect Cloudflare R2 first.")
     local_config = data_dir / "local.json"
     local = store.load_local_file() or {}
     local["wifi_ssid"] = payload["wifi_ssid"]

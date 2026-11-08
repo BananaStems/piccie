@@ -6,7 +6,7 @@ import json
 import logging
 import os
 import secrets
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +29,11 @@ class R2Config:
     secret_key: str = ""
     bucket: str = ""
     jurisdiction: str = "default"
+    # Optional custom domain. It serves only public_bucket, which holds copies
+    # under HMAC(link_secret) names, so the readable private archive is never public.
+    public_bucket: str = ""
+    public_domain: str = ""
+    link_secret: str = ""
 
 
 @dataclass
@@ -186,4 +191,14 @@ class ConfigStore:
             secret_key=r2_raw["secret_key"],
             bucket=r2_raw["bucket"],
             jurisdiction=r2_raw.get("jurisdiction", "default"),
+            public_bucket=r2_raw.get("public_bucket", ""),
+            public_domain=r2_raw.get("public_domain", ""),
+            link_secret=r2_raw.get("link_secret", ""),
         )
+
+    def save_r2(self, r2: R2Config) -> None:
+        """Write R2 settings to the mode-0600 local file, keeping its other keys."""
+        local = self.load_local_file() or {}
+        local["r2"] = asdict(r2)
+        write_json_atomic(LOCAL_CONFIG_PATH, local)
+        LOCAL_CONFIG_PATH.chmod(0o600)

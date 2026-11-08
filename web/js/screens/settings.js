@@ -225,15 +225,11 @@ export async function renderSettingsScreen({ app, state, render, api, escapeHtml
           <button class="btn btn-secondary" id="operator-pin-save" type="submit">Save PIN</button>
           <p class="access-status" id="operator-pin-status" role="status"></p>
         </form>
-        <form class="access-form" id="ssh-access-form" autocomplete="off">
-          <p class="access-description">Add one public key for secure remote maintenance. The private key stays on your computer.</p>
-          <label class="access-field access-field-wide">
-            <span>SSH public key</span>
-            <textarea id="ssh-authorized-key" rows="4" maxlength="1000" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="ssh-ed25519 …">${escapeHtml(access.ssh_authorized_key || "")}</textarea>
-          </label>
-          <button class="btn btn-secondary" id="ssh-access-save" type="submit">Save SSH key</button>
-          <p class="access-status" id="ssh-access-status" role="status"></p>
-        </form>
+        <div class="access-form">
+          <p class="access-description">Change cloud storage, the custom domain or the SSH key from a phone or computer on the same Wi-Fi.</p>
+          <button class="btn btn-secondary" id="setup-link-open" type="button">Open on phone or computer</button>
+          <p class="access-status" id="setup-link-status" role="status"></p>
+        </div>
       </div>`;
   const appVersion = escapeHtml(state.status?.version || "Unknown");
   const buildId = escapeHtml(state.status?.build || "Unknown");
@@ -371,36 +367,33 @@ export async function renderSettingsScreen({ app, state, render, api, escapeHtml
     }
   });
 
-  const sshForm = document.getElementById("ssh-access-form");
-  sshForm?.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const input = document.getElementById("ssh-authorized-key");
-    const key = input.value.trim();
-    const button = document.getElementById("ssh-access-save");
-    const status = document.getElementById("ssh-access-status");
-    status.classList.remove("error-text");
-    if (!key && access.ssh_key_configured) {
-      const confirmed = await showConfirm({
-        title: "Remove SSH access?",
-        message: "Remote maintenance will stop working until another public key is added here or through piccie-r2.txt.",
-        confirmLabel: "Remove key",
-        danger: true,
-      });
-      if (!confirmed) return;
-    }
+  document.getElementById("setup-link-open")?.addEventListener("click", async (event) => {
+    const button = event.currentTarget;
+    const status = document.getElementById("setup-link-status");
     button.disabled = true;
+    status.textContent = "";
+    let link;
     try {
-      const result = await api.updateSshAuthorizedKey(key);
-      access.ssh_key_configured = result.ssh_key_configured;
-      access.ssh_authorized_key = key;
-      input.value = key;
-      status.textContent = key ? "SSH key updated." : "SSH access removed.";
+      link = await api.createSetupLink();
     } catch (error) {
       status.textContent = error.message;
       status.classList.add("error-text");
+      return;
     } finally {
       button.disabled = false;
     }
+    const overlay = document.createElement("div");
+    overlay.className = "confirm-overlay template-pair-overlay";
+    overlay.innerHTML = `<section class="template-pair-panel" role="dialog" aria-modal="true" aria-labelledby="setup-link-title">
+      <div><p class="setup-eyebrow">Cloud and remote access</p><h2 id="setup-link-title">Continue on your phone or computer</h2><p>Use the same Wi-Fi as the booth. The link stops working when you close this.</p><code>${escapeHtml(link.url)}</code><p>Setup code <strong>${escapeHtml(link.code)}</strong></p></div>
+      <img src="/api/qr?data=${encodeURIComponent(link.link)}" alt="QR code to open booth settings" />
+      <button class="btn btn-secondary" type="button">Done</button>
+    </section>`;
+    overlay.querySelector("button").onclick = async () => {
+      overlay.remove();
+      await api.revokeSetupLink().catch(() => {});
+    };
+    document.getElementById("booth-frame").appendChild(overlay);
   });
 
   const performanceElement = document.querySelector(".performance-panel");
