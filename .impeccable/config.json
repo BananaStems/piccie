@@ -1,0 +1,17 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "cream-palette",
+        "value": "*",
+        "files": [
+          "web/css/studio.css"
+        ],
+        "createdAt": "2026-11-08T02:06:32.097Z",
+        "reason": "Piccie brand paper colour, shared with the booth UI (web/css/app.css --bg #f2ebe3); evidence from the codebase"
+      }
+    ]
+  }
+}
