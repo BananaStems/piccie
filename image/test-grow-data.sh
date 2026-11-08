@@ -399,6 +399,11 @@ test_systemd_ordering_keeps_growth_offline() {
   assert_contains "${qemu_runner}" 'format=raw,if=sd'
   assert_contains "${qemu_runner}" 'systemd.log_target=kmsg'
   assert_contains "${qemu_runner}" 'systemd.journald.forward_to_console=1'
+  # Raspberry Pi OS sets kernel.printk=3 at sysctl time; without these the serial
+  # log goes quiet mid-boot and the smoke test can never see a successful boot.
+  assert_contains "${qemu_runner}" 'ignore_loglevel'
+  assert_contains "${qemu_runner}" 'systemd.journald.forward_to_kmsg=1'
+  assert_contains "${qemu_runner}" 'systemd.journald.max_level_kmsg=info'
   assert_contains "${REPO_ROOT}/image/smoke-qemu.sh" 'reboot: Restarting system'
 }
 

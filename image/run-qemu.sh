@@ -68,7 +68,7 @@ PY
   # QEMU's headless Raspberry Pi model can stall while Plymouth probes its
   # emulated framebuffer. The physical appliance still uses Plymouth; only the
   # serial smoke boot masks graphical startup that cannot be validated here.
-  APPEND="earlycon=pl011,mmio32,0xfe201000 console=ttyAMA0,115200 root=${ROOT_DEV} ro rootwait rootfstype=ext4 piccie.qemu=1 dwc_otg.fiq_fsm_enable=0 systemd.firstboot=off systemd.condition_first_boot=0 systemd.log_target=kmsg systemd.journald.forward_to_console=1 nowatchdog systemd.watchdog=0 systemd.unit=multi-user.target systemd.mask=lightdm.service systemd.mask=plymouth-start.service systemd.mask=plymouth-read-write.service systemd.mask=plymouth-quit-wait.service systemd.mask=systemd-remount-fs.service systemd.mask=systemd-growfs-root.service systemd.mask=rpi-resize-swap-file.service"
+  APPEND="earlycon=pl011,mmio32,0xfe201000 console=ttyAMA0,115200 root=${ROOT_DEV} ro rootwait rootfstype=ext4 piccie.qemu=1 dwc_otg.fiq_fsm_enable=0 systemd.firstboot=off systemd.condition_first_boot=0 systemd.log_target=kmsg systemd.journald.forward_to_console=1 systemd.journald.forward_to_kmsg=1 systemd.journald.max_level_kmsg=info printk.devkmsg=on ignore_loglevel nowatchdog systemd.watchdog=0 systemd.unit=multi-user.target systemd.mask=lightdm.service systemd.mask=plymouth-start.service systemd.mask=plymouth-read-write.service systemd.mask=plymouth-quit-wait.service systemd.mask=systemd-remount-fs.service systemd.mask=systemd-growfs-root.service systemd.mask=rpi-resize-swap-file.service"
 else
   DTB="${BOOT_DIR}/bcm2710-rpi-3-b-plus.dtb"
   CPU="cortex-a53"
