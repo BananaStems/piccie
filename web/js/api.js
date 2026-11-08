@@ -55,6 +55,7 @@ export const api = {
   listEventSessions: (id) => request(`/events/${id}/sessions`),
   updateEvent: (id, data) => request(`/events/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
   getEventShare: (id) => request(`/events/${id}/share`),
+  getEventShareProgress: (id) => request(`/events/${id}/share/progress`),
   createEventShare: (id) => request(`/events/${id}/share`, { method: "POST", timeoutMs: 900000 }),
   regenerateEventShare: (id) => request(`/events/${id}/share/regenerate`, { method: "POST", timeoutMs: 900000 }),
   disableEventShare: (id) => request(`/events/${id}/share`, { method: "DELETE" }),

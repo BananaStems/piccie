@@ -195,7 +195,7 @@ export function renderGalleryScreen({ app, state, render, api, escapeHtml, showC
         </div>`}
       <nav class="bottom-bar" aria-label="Gallery actions">
         <button class="btn btn-secondary" type="button" id="gallery-back">Back</button>
-        <button class="btn" type="button" id="gallery-share" ${sessions.length ? "" : "disabled"}>Share event</button>
+        <button class="btn" type="button" id="gallery-share" ${sessions.length ? "" : "disabled"}>Download all event strips</button>
       </nav>
     </div>`;
 
@@ -220,7 +220,7 @@ export function renderGalleryScreen({ app, state, render, api, escapeHtml, showC
     button.textContent = "Preparing…";
     try {
       // The booth returns the live link at once, or rebuilds one near its 7-day expiry.
-      const share = await api.createEventShare(state.galleryEvent.id);
+      const share = await withShareProgress(() => api.createEventShare(state.galleryEvent.id));
       state.galleryEvent.share_url = share.url;
       const stored = state.events.find((item) => item.id === state.galleryEvent.id);
       if (stored) stored.share_url = share.url;
@@ -229,7 +229,7 @@ export function renderGalleryScreen({ app, state, render, api, escapeHtml, showC
       showShareError(error.message);
     } finally {
       button.disabled = false;
-      button.textContent = "Share event";
+      button.textContent = "Download all event strips";
     }
   });
   app.querySelectorAll(".gallery-thumb").forEach((thumb) => {
@@ -298,7 +298,41 @@ export function renderGalleryScreen({ app, state, render, api, escapeHtml, showC
   }
 
   function showShareError(message) {
-    showGalleryError(message, "Could not share event");
+    showGalleryError(message, "Could not prepare download");
+  }
+
+  // Packing and uploading a big event takes minutes; poll the booth so the bar keeps moving.
+  async function withShareProgress(publish) {
+    const eventId = state.galleryEvent.id;
+    const overlay = document.createElement("div");
+    overlay.className = "confirm-overlay";
+    overlay.innerHTML = `<section class="confirm-panel" role="dialog" aria-modal="true" aria-labelledby="share-progress-title">
+      <h2 class="confirm-title" id="share-progress-title">Preparing download</h2>
+      <p class="confirm-message" id="share-progress-label">Starting…</p>
+      <div class="share-progress" role="progressbar" aria-labelledby="share-progress-label" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div></div></div>
+    </section>`;
+    document.getElementById("booth-frame").appendChild(overlay);
+    const label = overlay.querySelector("#share-progress-label");
+    const bar = overlay.querySelector(".share-progress");
+    const mb = (bytes) => (bytes / 1e6).toFixed(bytes < 1e7 ? 1 : 0);
+    const timer = setInterval(async () => {
+      const progress = await api.getEventShareProgress(eventId).catch(() => null);
+      if (!progress?.total) return;
+      const part = Math.min(1, progress.done / progress.total);
+      // Packing is quick local disk work; the upload is most of the wait.
+      const overall = progress.stage === "packing" ? part * 0.1 : 0.1 + part * 0.9;
+      bar.firstElementChild.style.transform = `scaleX(${overall})`;
+      bar.setAttribute("aria-valuenow", String(Math.round(overall * 100)));
+      label.textContent = progress.stage === "packing"
+        ? `Packing strip ${progress.done + 1} of ${progress.total}`
+        : `Uploading ${mb(progress.done)} of ${mb(progress.total)} MB`;
+    }, 1000);
+    try {
+      return await publish();
+    } finally {
+      clearInterval(timer);
+      overlay.remove();
+    }
   }
 
   function showEventShare(url) {
@@ -336,7 +370,7 @@ export function renderGalleryScreen({ app, state, render, api, escapeHtml, showC
       setBusy(true);
       status.textContent = "Creating a new link…";
       try {
-        const share = await api.regenerateEventShare(state.galleryEvent.id);
+        const share = await withShareProgress(() => api.regenerateEventShare(state.galleryEvent.id));
         state.galleryEvent.share_url = share.url;
         overlay.remove();
         showEventShare(share.url);

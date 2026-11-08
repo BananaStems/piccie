@@ -8,6 +8,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -131,6 +132,7 @@ class R2Uploader:
         archive_path: Path,
         previous_token: str | None = None,
         event_folder: str | None = None,
+        on_progress: Callable[[int], None] | None = None,
     ) -> tuple[str, str]:
         token = f"{event_id}.{secrets.token_urlsafe(32)}"
         self._upload_file(
@@ -141,6 +143,7 @@ class R2Uploader:
                 else r2_event_archive_key(event_id)
             ),
             content_type="application/zip",
+            on_progress=on_progress,
         )
         gallery_key = r2_event_gallery_key(event_id, token)
         self._upload_bytes(
@@ -247,6 +250,7 @@ class R2Uploader:
         path: Path,
         key: str,
         content_type: str = "image/jpeg",
+        on_progress: Callable[[int], None] | None = None,
     ) -> None:
         self._signed_call(
             self.client.upload_file,
@@ -254,6 +258,7 @@ class R2Uploader:
             self.config.bucket,
             key,
             ExtraArgs={"ContentType": content_type},
+            Callback=on_progress,
         )
         logger.info("Uploaded %s to s3://%s/%s", path.name, self.config.bucket, key)
 

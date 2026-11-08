@@ -106,6 +106,4 @@ class TemplateRegistry:
         template = self.load(template_id)
         if not template.custom or template.path is None:
             raise ValueError("Built-in templates cannot be removed")
-        if not template.archived:
-            raise ValueError("Archive the template before deleting it")
         shutil.rmtree(template.path)

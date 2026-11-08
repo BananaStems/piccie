@@ -450,7 +450,9 @@ def test_phone_studio_pairs_installs_and_archives_template(client, monkeypatch):
     assert restored.json()["archived"] is False
     assert app.state.templates.load(template_id).archived is False
 
-    assert test_client.post(f"/api/templates/{template_id}/archive").status_code == 200
+    assert installed.json()["created_at"]
+    assert test_client.delete("/api/templates/classic").status_code == 400
+    # Once no event uses it, an active custom template deletes without archiving first.
     assert test_client.delete(f"/api/events/{event.id}").status_code == 200
     assert test_client.delete(f"/api/templates/{template_id}").status_code == 204
     with pytest.raises(FileNotFoundError):
@@ -566,7 +568,16 @@ def test_event_share_builds_archive_and_can_be_disabled(client, monkeypatch):
             archive,
             previous_token=None,
             event_folder=None,
+            on_progress=None,
         ):
+            from engine.api import routes
+
+            size = archive.stat().st_size
+            on_progress(size)
+            assert routes.event_share_progress(event_id) == {
+                "event_id": event_id, "stage": "uploading", "done": size, "total": size,
+            }
+            assert routes.event_share_progress("other-event") == {"stage": "idle"}
             with zipfile.ZipFile(archive) as bundle:
                 assert bundle.namelist() == [
                     "strips/wedding-strip-00001.jpg",
@@ -586,6 +597,7 @@ def test_event_share_builds_archive_and_can_be_disabled(client, monkeypatch):
     created = test_client.post(f"/api/events/{event.id}/share")
     assert created.status_code == 200
     assert created.json()["enabled"] is True
+    assert test_client.get(f"/api/events/{event.id}/share/progress").json() == {"stage": "idle"}
     assert app.state.storage.get_event(event.id).share_token.endswith(".new-token")
 
     regenerated = test_client.post(f"/api/events/{event.id}/share/regenerate")
@@ -633,7 +645,7 @@ def test_share_link_near_expiry_is_rebuilt(client, monkeypatch):
         def __init__(self, _config):
             pass
 
-        def publish_event(self, event_id, _name, _date, _archive, previous_token=None, event_folder=None):
+        def publish_event(self, event_id, _name, _date, _archive, previous_token=None, event_folder=None, on_progress=None):
             self.previous.append(previous_token)
             return "https://gallery.example/fresh", f"{event_id}.fresh"
 

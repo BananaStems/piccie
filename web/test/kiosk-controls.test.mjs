@@ -180,3 +180,10 @@ test("event share allows large strip and original-photo archives", () => {
   assert.match(apiSource, /createEventShare:[\s\S]+timeoutMs: 900000/);
   assert.match(adminSource, /download every strip and original photo/);
 });
+
+test("event download shows upload progress while it is prepared", () => {
+  assert.match(adminSource, />Download all event strips</);
+  assert.match(adminSource, /withShareProgress\(\(\) => api\.createEventShare/);
+  assert.match(adminSource, /withShareProgress\(\(\) => api\.regenerateEventShare/);
+  assert.match(apiSource, /getEventShareProgress: \(id\) => request\(`\/events\/\$\{id\}\/share\/progress`\)/);
+});

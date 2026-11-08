@@ -141,6 +141,7 @@ class TemplateResponse(BaseModel):
     custom: bool = False
     archived: bool = False
     event_count: int = 0
+    created_at: str | None = None
 
 
 class SessionResponse(BaseModel):

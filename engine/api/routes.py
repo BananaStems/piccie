@@ -10,6 +10,7 @@ import tempfile
 import threading
 import zipfile
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
@@ -69,6 +70,8 @@ STUDIO_LINK_INACTIVE = "This Studio link is no longer active. Create a new one o
 # so a kiosk retry cannot mint a second link, and a publish that finishes later
 # cannot revive a gallery the organiser just cleared, deleted or disabled.
 _publish_lock = threading.Lock()
+# What the one running gallery publish has done so far, for the kiosk's progress bar.
+_publish_progress: dict = {}
 
 
 @contextmanager
@@ -527,7 +530,9 @@ def _event_archive(request: Request, event_id: str) -> Path:
     temporary = archive.with_suffix(".zip.new")
     try:
         with zipfile.ZipFile(temporary, "w", compression=zipfile.ZIP_STORED, allowZip64=True) as bundle:
-            for session in completed:
+            _publish_progress.update(total=len(completed))
+            for packed, session in enumerate(completed):
+                _publish_progress["done"] = packed
                 session_dir = Path(session.local_path)
                 stem = r2_named_strip_stem(event.name, session.strip_number)
                 bundle.write(
@@ -563,22 +568,35 @@ def _publish_event(request: Request, event_id: str, regenerate: bool) -> EventSh
         config = _ready_config(request)
         if not config.r2:
             raise HTTPException(400, "Cloud storage is not configured.")
-        archive = _event_archive(request, event_id)
+        _publish_progress.update(event_id=event.id, stage="packing", done=0, total=0)
         try:
-            url, token = R2Uploader(config.r2).publish_event(
-                event.id,
-                event.name,
-                event.date,
-                archive,
-                previous_token=event.share_token,
-                event_folder=event.r2_folder,
-            )
-        except Exception as exc:
-            logger.exception("Publishing the gallery for event %s failed", event.id)
-            raise HTTPException(502, f"Could not publish the event gallery: {exc}") from exc
+            archive = _event_archive(request, event_id)
+            _publish_progress.update(stage="uploading", done=0, total=archive.stat().st_size)
+            counted = threading.Lock()
+
+            def uploaded(amount: int) -> None:
+                # boto3 reports from several upload threads at once.
+                with counted:
+                    _publish_progress["done"] += amount
+
+            try:
+                url, token = R2Uploader(config.r2).publish_event(
+                    event.id,
+                    event.name,
+                    event.date,
+                    archive,
+                    previous_token=event.share_token,
+                    event_folder=event.r2_folder,
+                    on_progress=uploaded,
+                )
+            except Exception as exc:
+                logger.exception("Publishing the gallery for event %s failed", event.id)
+                raise HTTPException(502, f"Could not publish the event gallery: {exc}") from exc
+            finally:
+                # Only needed for the upload; kept, it doubles the event's disk use.
+                archive.unlink(missing_ok=True)
         finally:
-            # Only needed for the upload; kept, it doubles the event's disk use.
-            archive.unlink(missing_ok=True)
+            _publish_progress.clear()
         storage.set_event_share(event.id, url, token)
         return EventShareResponse(enabled=True, url=url)
 
@@ -589,6 +607,12 @@ def event_share(request: Request, event_id: str) -> EventShareResponse:
     if not event:
         raise HTTPException(404, "Event not found")
     return EventShareResponse(enabled=bool(event.share_url), url=event.share_url)
+
+
+@router.get("/events/{event_id}/share/progress")
+def event_share_progress(event_id: str) -> dict:
+    progress = dict(_publish_progress)
+    return progress if progress.get("event_id") == event_id else {"stage": "idle"}
 
 
 @router.post("/events/{event_id}/share", response_model=EventShareResponse)
@@ -663,6 +687,10 @@ def _template_response(template) -> TemplateResponse:
         photo_height=metrics["slot_h"],
         custom=template.custom,
         archived=template.archived,
+        # Phone-made templates often share a name; when each was saved tells them apart.
+        created_at=datetime.fromtimestamp(
+            (template.path / "template.json").stat().st_mtime, timezone.utc
+        ).isoformat() if template.custom and template.path else None,
     )
 
 
@@ -726,8 +754,8 @@ def delete_template(request: Request, template_id: str) -> Response:
     registry: TemplateRegistry = request.app.state.templates
     try:
         template = registry.load(template_id)
-        if not template.custom or not template.archived:
-            raise ValueError("Only archived custom templates can be deleted")
+        if not template.custom:
+            raise ValueError("Built-in templates cannot be deleted")
         if request.app.state.storage.template_event_count(template.id):
             raise HTTPException(409, "This template is still used by an event and cannot be deleted")
         registry.remove(template_id)
