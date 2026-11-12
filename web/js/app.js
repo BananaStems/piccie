@@ -46,7 +46,6 @@ const state = {
   activeEvent: null,
   partyState: "idle",
   sessionId: null,
-  photoIndex: 0,
   activeTemplate: null,
   captureShellMounted: false,
   resultTimer: 120,
@@ -237,6 +236,13 @@ function returnToPartyIdle() {
   state.qrUrl = null;
   state.stripUrl = null;
   state.resultOffline = false;
+  // The result countdown can end while a guest left the Wi-Fi screen open.
+  if (state.view === "wifi") {
+    state.view = "party";
+    state.wifiReturnView = null;
+    render();
+    return;
+  }
   renderParty();
 }
 
@@ -584,6 +590,8 @@ function render() {
 }
 
 function returnFromWifi() {
+  // The success timer can fire after Back already left this screen.
+  if (state.view !== "wifi") return;
   const returnView = state.wifiReturnView || "admin";
   const returningToResult = returnView === "party" && state.partyState === "result";
   state.wifiReturnView = null;
@@ -607,7 +615,6 @@ function startAdminStatusPolling() {
     const connectionChanged =
       latest.wifi_ssid !== state.status?.wifi_ssid ||
       latest.r2_reachable !== state.status?.r2_reachable ||
-      latest.upload_pending !== state.status?.upload_pending ||
       latest.upload_failed !== state.status?.upload_failed;
     state.status = latest;
     if (connectionChanged) render();
@@ -635,7 +642,7 @@ async function enterParty(event, { persist = true } = {}) {
   }
   const template =
     state.templates.find((t) => t.id === event.template_id) ||
-    (await api.listTemplates()).find((t) => t.id === event.template_id);
+    (await api.listTemplates().catch(() => [])).find((t) => t.id === event.template_id);
   applyTemplateTheme(template?.colors || {});
   state.activeEvent = event;
   state.activeTemplate = template || null;
@@ -729,6 +736,8 @@ function renderParty() {
       state.wifiReturnView = "party";
       state.view = "wifi";
       render();
+      state.resultTimer = 120; // a full window to type the Wi-Fi password
+      startResultTimer();
     });
   }
 }
@@ -817,10 +826,6 @@ function onPreviewError() {
     `<button class="btn" type="button" id="preview-back">Back to start</button>`;
   const back = document.getElementById("preview-back");
   if (back) back.onclick = () => returnToPartyIdle();
-}
-
-function waitRingCountdown(seconds, slotIndex, onShutter) {
-  return startRingCountdown(seconds, slotIndex, onShutter);
 }
 
 function setActiveSlot(index) {
@@ -921,27 +926,22 @@ async function finalizeSession() {
     startResultTimer();
     if (!session.r2_strip_url) pollUpload();
   } catch (e) {
-    state.partyState = "idle";
-    state.sessionId = null;
-    renderParty();
-    app.innerHTML = `<div class="screen centered"><p class="error-text">${escapeHtml(e.message)}</p><button class="btn" id="back-idle">Back to idle</button></div>`;
-    document.getElementById("back-idle").onclick = () => {
-      state.partyState = "idle";
-      render();
-    };
+    // Keep the session: its three photos are saved and the strip can be built again.
+    app.innerHTML = `<div class="screen centered"><p class="error-text">${escapeHtml(e.message)}</p><button class="btn" id="finalize-retry">Try again</button><button class="btn btn-secondary" id="back-idle">Back to idle</button></div>`;
+    document.getElementById("finalize-retry").onclick = finalizeSession;
+    document.getElementById("back-idle").onclick = returnToPartyIdle;
   }
 }
 
 async function runPhotoSequence() {
   setActiveSlot(1);
-  let pendingShot = waitRingCountdown(
+  let pendingShot = startRingCountdown(
     photoCountdownSeconds(1),
     1,
     () => captureWithFlash(state.sessionId, 1),
   );
 
   for (let i = 1; i <= 3; i += 1) {
-    state.photoIndex = i;
     if (!state.captureShellMounted) return;
 
     while (true) {
@@ -952,7 +952,7 @@ async function runPhotoSequence() {
         await animateThumbnailToSlot(i, photoUrl);
         if (i < 3) {
           setActiveSlot(i + 1);
-          pendingShot = waitRingCountdown(
+          pendingShot = startRingCountdown(
             photoCountdownSeconds(i + 1),
             i + 1,
             () => captureWithFlash(state.sessionId, i + 1),
@@ -964,7 +964,7 @@ async function runPhotoSequence() {
         await showCaptureError(e.message);
         if (!state.captureShellMounted) return;
         setActiveSlot(i);
-        pendingShot = waitRingCountdown(
+        pendingShot = startRingCountdown(
           photoCountdownSeconds(i),
           i,
           () => captureWithFlash(state.sessionId, i),
@@ -985,7 +985,6 @@ async function startSession() {
     const template = getActiveTemplate();
     const session = await api.startSession(state.activeEvent.id);
     state.sessionId = session.id;
-    state.photoIndex = 1;
     mountCaptureShell(template);
     await runPhotoSequence();
   } catch (e) {

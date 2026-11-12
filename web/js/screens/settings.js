@@ -385,7 +385,7 @@ export async function renderSettingsScreen({ app, state, render, api, escapeHtml
     const overlay = document.createElement("div");
     overlay.className = "confirm-overlay template-pair-overlay";
     overlay.innerHTML = `<section class="template-pair-panel" role="dialog" aria-modal="true" aria-labelledby="setup-link-title">
-      <div><p class="setup-eyebrow">Cloud and remote access</p><h2 id="setup-link-title">Continue on your phone or computer</h2><p>Use the same Wi-Fi as the booth. The link stops working when you close this.</p><code>${escapeHtml(link.url)}</code><p>Setup code <strong>${escapeHtml(link.code)}</strong></p></div>
+      <div><p class="setup-eyebrow">Cloud and remote access</p><h2 id="setup-link-title">Continue on your phone or computer</h2><p>Use the same Wi-Fi as the booth, and only a Wi-Fi you trust. The link stops working when you close this.</p><code>${escapeHtml(link.url)}</code><p>Setup code <strong>${escapeHtml(link.code)}</strong></p></div>
       <img src="/api/qr?data=${encodeURIComponent(link.link)}" alt="QR code to open booth settings" />
       <button class="btn btn-secondary" type="button">Done</button>
     </section>`;

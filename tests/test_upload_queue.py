@@ -244,6 +244,7 @@ def test_rescan_retries_failed_cloud_health_without_reboot():
     )
     upload_queue.resume_pending = lambda: calls.append(("uploads", None))
     upload_queue.retry_pending_deletions = lambda: calls.append(("deletions", None))
+    # The rescan must never prune: a clock jump would delete a session in progress.
     upload_queue.storage = type(
         "StorageStub",
         (),
@@ -265,7 +266,6 @@ def test_rescan_retries_failed_cloud_health_without_reboot():
         ("health", None),
         ("uploads", None),
         ("deletions", None),
-        ("prune", None),
         ("wait", 30),
     ]
 

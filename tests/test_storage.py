@@ -417,3 +417,37 @@ def test_legacy_skipped_uploads_are_requeued_by_migration(storage):
     migrated = storage.get_session(session.id)
     assert migrated.upload_status == "failed"
     assert "not configured" in migrated.upload_error
+
+
+def test_new_event_avoids_folder_still_queued_for_cloud_deletion(storage):
+    old = storage.create_event("Party", "2026-11-14", "classic")
+    storage.create_session(old.id)
+    storage.delete_event(old.id)  # offline: the folder delete stays queued
+
+    new = storage.create_event("Party", "2026-11-14", "classic")
+
+    assert new.r2_folder != old.r2_folder
+    assert f"named-event:{old.id}:{new.r2_folder}" not in storage.pending_r2_deletions()
+
+
+def test_clearing_photos_does_not_rename_the_event_folder(storage):
+    event = storage.create_event("Party", "2026-11-14", "classic")
+    storage.create_session(event.id)
+    storage.clear_event_photos(event.id)  # queues deletions under its own folder
+
+    updated = storage.update_event(event.id, "Party", "2026-11-14")
+
+    assert updated.r2_folder == event.r2_folder
+
+
+def test_prune_keeps_a_good_strip_whose_upload_was_marked_corrupt(storage):
+    event = storage.create_event("Wedding", "2026-06-14", "classic")
+    session = storage.create_session(event.id)
+    strip = Path(session.local_path) / "strip.jpg"
+    strip.write_bytes(b"\xff\xd8strip\xff\xd9")
+    storage.update_session_upload(session.id, "corrupt", error="photo-2.jpg is broken")
+    with storage._connect() as conn:
+        conn.execute("UPDATE sessions SET created_at = ? WHERE id = ?", ("2020-01-01T00:00:00+00:00", session.id))
+
+    assert storage.prune_abandoned_sessions() == 0
+    assert strip.exists()

@@ -25,8 +25,12 @@ async function request(path, options = {}) {
     throw new Error("Could not reach the booth. Please try again.");
   }
   if (!res.ok) {
+    // An engine restart forgets the admin session; reload to reach the PIN screen.
+    if (res.status === 401 && adminToken && path !== "/admin/unlock") window.location.reload();
     const err = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new Error(err.detail || "Request failed");
+    // Validation errors arrive as a list of {msg}.
+    const detail = Array.isArray(err.detail) ? [...new Set(err.detail.map((item) => item.msg))].join(" ") : err.detail;
+    throw new Error(detail || "Request failed");
   }
   if (res.status === 204) return null;
   const type = res.headers.get("content-type") || "";
@@ -54,7 +58,6 @@ export const api = {
   getEvent: (id) => request(`/events/${id}`),
   listEventSessions: (id) => request(`/events/${id}/sessions`),
   updateEvent: (id, data) => request(`/events/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
-  getEventShare: (id) => request(`/events/${id}/share`),
   getEventShareProgress: (id) => request(`/events/${id}/share/progress`),
   // The kiosk shows upload progress meanwhile, and boto3's own read timeout ends a dead
   // upload, so allow a big event an hour on slow venue Wi-Fi.

@@ -28,6 +28,7 @@ install -m 644 "${INSTALL_DIR}/image/piccie-engine.service" /etc/systemd/system/
 install -m 755 "${INSTALL_DIR}/image/kiosk-launch.sh" /usr/local/bin/piccie-kiosk
 install -m 755 "${INSTALL_DIR}/image/piccie-update.sh" /usr/local/sbin/piccie-update
 install -m 755 "${INSTALL_DIR}/image/piccie-restart-engine" /usr/local/sbin/piccie-restart-engine
+install -m 755 "${INSTALL_DIR}/image/piccie-restore-release" /usr/local/sbin/piccie-restore-release
 install -m 440 "${INSTALL_DIR}/image/files/piccie-restart-engine-sudoers" /etc/sudoers.d/piccie-restart-engine
 visudo -cf /etc/sudoers.d/piccie-restart-engine >/dev/null
 install -m 755 "${INSTALL_DIR}/image/piccie-performance" /usr/local/sbin/piccie-performance

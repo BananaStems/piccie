@@ -1,8 +1,5 @@
 import { api } from "../api.js";
 
-const EXAMPLE_HEADING = "";
-const EXAMPLE_SUBHEADING = "";
-const EXAMPLE_DATE = "";
 const EDIT_ICON_SVG =
   '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>';
 const TEMPLATE_TICK_SVG =
@@ -86,9 +83,9 @@ function bindTemplateRail(state) {
 function previewFields() {
   const displayDate = document.getElementById("edit-ev-date")?.value || "";
   return {
-    line1: document.getElementById("edit-ev-line1")?.value.trim() || EXAMPLE_HEADING,
-    line2: document.getElementById("edit-ev-line2")?.value.trim() || EXAMPLE_SUBHEADING,
-    date: displayToIso(displayDate) || EXAMPLE_DATE,
+    line1: document.getElementById("edit-ev-line1")?.value.trim() || "",
+    line2: document.getElementById("edit-ev-line2")?.value.trim() || "",
+    date: displayToIso(displayDate) || "",
     date_separator: document.getElementById("edit-date-separator")?.value || "/",
   };
 }
@@ -125,9 +122,9 @@ export function renderEditorScreen({ app, state, render, escapeHtml, promptText,
   const existing = Boolean(event.id);
   const end = endFields(event.ends_at, event.date);
   const initialPreview = {
-    line1: event.line1 || EXAMPLE_HEADING,
-    line2: event.line2 || EXAMPLE_SUBHEADING,
-    date: event.date || EXAMPLE_DATE,
+    line1: event.line1 || "",
+    line2: event.line2 || "",
+    date: event.date || "",
     date_separator: event.date_separator || "/",
   };
   app.innerHTML = `
@@ -209,6 +206,8 @@ export function renderEditorScreen({ app, state, render, escapeHtml, promptText,
     else if (!template) error.textContent = "Choose a template";
     if (error.textContent) return;
 
+    const saveButton = document.getElementById("save-event");
+    saveButton.disabled = true; // a second tap must not create a second event
     try {
       const payload = {
         name,
@@ -227,6 +226,7 @@ export function renderEditorScreen({ app, state, render, escapeHtml, promptText,
       render();
     } catch (saveError) {
       error.textContent = saveError.message;
+      saveButton.disabled = false;
     }
   };
 

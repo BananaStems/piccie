@@ -1,6 +1,5 @@
 const TAP_COUNT = 5;
 const TAP_WINDOW_MS = 2000;
-const ZONE_SIZE = 100;
 
 let taps = [];
 let handler = null;

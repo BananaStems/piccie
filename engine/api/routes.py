@@ -189,6 +189,9 @@ def _onboarding_required() -> bool:
         not appliance_qemu()
         and os.environ.get("PICCIE_ONBOARDING") == "1"
         and _onboarding_pending()
+        # On the RAM-disk fallback every booth looks unprovisioned; show the
+        # admin screen's storage warning there, never first-time setup.
+        and not data_degraded()
     )
 
 

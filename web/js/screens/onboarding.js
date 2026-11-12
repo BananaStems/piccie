@@ -171,7 +171,7 @@ export function renderOnboardingScreen({ app, state, render, api, escapeHtml, cl
     shell(
       "phone",
       "Finish on your phone or computer",
-      "Connect cloud storage, an optional custom domain and the operator PIN from any phone or computer on the same Wi-Fi. Nothing else needs typing here.",
+      "Connect cloud storage, an optional custom domain and the operator PIN from any phone or computer on the same Wi-Fi. Use a Wi-Fi you trust. Nothing else needs typing here.",
       `<div class="onboarding-setup-link">
           <div>
             <p>Scan the code, or open this address in a browser:</p>

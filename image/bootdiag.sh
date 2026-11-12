@@ -36,11 +36,6 @@ TMP="$(mktemp 2>/dev/null || echo /tmp/pbdiag.$$)"
   for reason in /proc/device-tree/chosen/bootloader/reset_reason /sys/firmware/devicetree/base/chosen/bootloader/reset_reason; do
     [ -r "${reason}" ] && { printf '%s: ' "${reason}"; tr -d '\0' <"${reason}"; echo; }
   done
-  journalctl -b -1 -n 60 --no-pager 2>&1
-  echo
-  echo "### usb storage (bridge id for UAS quirk)"; lsusb 2>&1
-  echo "--- uas/usb-storage modules ---"; lsmod | grep -E 'uas|usb_storage' 2>&1
-  echo "--- sd/usb dmesg ---"; dmesg | grep -iE 'uas|usb-storage|\bsd [0-9]' | tail -20 2>&1
   echo
   echo "### lightdm enabled/active"; systemctl is-enabled lightdm 2>&1; systemctl is-active lightdm 2>&1
   echo "### lightdm log"; journalctl -u lightdm -b --no-pager 2>&1 | tail -40
@@ -68,7 +63,9 @@ TMP="$(mktemp 2>/dev/null || echo /tmp/pbdiag.$$)"
 
 # SSH-readable copy on /data (always).
 cp -f "${TMP}" "${CURRENT}" 2>/dev/null
-# Mac-readable copy on the FAT partition when it's still writable (boot 1).
-cp -f "${TMP}" /boot/firmware/piccie-boot-diag.txt 2>/dev/null || true
+# Mac-readable copy on the FAT partition, only when the engine is down (no SSH
+# may be possible then). Writing the kernel's partition every boot risks it.
+systemctl is-active --quiet piccie-engine ||
+  cp -f "${TMP}" /boot/firmware/piccie-boot-diag.txt 2>/dev/null || true
 rm -f "${TMP}" 2>/dev/null
 sync

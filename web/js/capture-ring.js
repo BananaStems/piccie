@@ -12,7 +12,6 @@ let svgEl = null;
 let trackEl = null;
 let progressEl = null;
 let countdownEl = null;
-let countdownSlot = null;
 let observer = null;
 let timeoutId = null;
 let cornerInterval = null;
@@ -119,7 +118,6 @@ export function detachCaptureRing() {
   trackEl = null;
   progressEl = null;
   countdownEl = null;
-  countdownSlot = null;
   lastRingWidth = 0;
   lastRingHeight = 0;
 }
@@ -154,7 +152,6 @@ export function stopRingCountdown() {
     countdownEl.textContent = "";
   }
   countdownEl = null;
-  countdownSlot = null;
 }
 
 export function startRingCountdown(seconds, slotIndex = 1, onShutter = null) {
@@ -166,7 +163,6 @@ export function startRingCountdown(seconds, slotIndex = 1, onShutter = null) {
 
     stopRingCountdown();
     countdownReject = reject;
-    countdownSlot = slotIndex;
     countdownEl = slotCountdownEl(slotIndex);
     await ensureLayout();
 
@@ -216,7 +212,6 @@ export function startRingCountdown(seconds, slotIndex = 1, onShutter = null) {
       }
       if (countdownEl) countdownEl.textContent = "";
       countdownEl = null;
-      countdownSlot = null;
       try {
         if (shutterPromise) await shutterPromise;
         resolve();

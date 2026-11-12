@@ -28,6 +28,10 @@ Environment=PICCIE_ONBOARDING_DATA_DIR=/data
 # config.json + the SQLite DB. The first-boot chown can race the mount, so assert
 # it here as root before every start. '+' runs privileged despite User=pi.
 ExecStartPre=+/bin/sh -c 'chown pi:pi /data 2>/dev/null || true'
+# Power was cut while an update was unproven (piccie-update leaves this note
+# until its health check passes): go back to the release that worked.
+# '-' keeps a failure here from blocking the engine.
+ExecStartPre=-+/usr/local/sbin/piccie-restore-release
 ExecStart=/opt/piccie/venv/bin/python -m engine.main
 Restart=always
 RestartSec=3

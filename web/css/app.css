@@ -524,12 +524,6 @@ input[type="date"]::-webkit-calendar-picker-indicator {
   font-size: var(--font-sm);
 }
 
-.admin-divider {
-  height: 1px;
-  width: 100%;
-  background: var(--border);
-}
-
 .admin-screen {
   position: relative;
   overflow: hidden;
@@ -827,7 +821,6 @@ input[type="date"]::-webkit-calendar-picker-indicator {
   margin: 0;
 }
 
-.gallery-qr-hint,
 .gallery-count {
   color: var(--muted);
   font-size: var(--font-xs);

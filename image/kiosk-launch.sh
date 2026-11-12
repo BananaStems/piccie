@@ -53,9 +53,5 @@ mkdir -p "${PROFILE}"
 rm -f "${PROFILE}/SingletonLock" "${PROFILE}/SingletonSocket" "${PROFILE}/SingletonCookie"
 COMMON_FLAGS+=( "--user-data-dir=${PROFILE}" )
 
-if [[ -n "${WAYLAND_DISPLAY:-}" ]]; then
-  exec "${CHROMIUM}" "${COMMON_FLAGS[@]}" --ozone-platform=wayland
-fi
-
 export DISPLAY="${DISPLAY:-:0}"
 exec "${CHROMIUM}" "${COMMON_FLAGS[@]}"

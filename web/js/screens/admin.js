@@ -344,7 +344,7 @@ export function renderGalleryScreen({ app, state, render, api, escapeHtml, showC
       <div class="event-share-copy">
         <p class="setup-eyebrow">Event gallery</p>
         <h2 id="event-share-title">Ready to share</h2>
-        <p>Scan this code to download every strip and original photo, or copy the private link.</p>
+        <p>Scan this code to download every strip and original photo, or copy the private link. Photos taken after this link was made are not included: tap New link to add them.</p>
         <code id="event-share-url">${escapeHtml(url)}</code>
         <p class="event-share-status" id="event-share-status" role="status"></p>
       </div>

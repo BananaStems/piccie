@@ -52,7 +52,8 @@ The booth now shows a QR code, a web address such as
 
 1. Scan the QR code with your phone. On a computer, type the address into a
    browser and enter the code. Your phone or computer must be on the same
-   Wi-Fi as the booth.
+   Wi-Fi as the booth. Do this on a Wi-Fi you trust, such as your home
+   network: the setup page sends your storage keys to the booth unencrypted.
 2. **Cloud storage.** Paste the Account ID, Access Key ID, Secret Access Key
    and bucket name from [Cloudflare storage](cloudflare.md). Select **Test and
    save**. Piccie uploads a test strip and downloads it again before it saves

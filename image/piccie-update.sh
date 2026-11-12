@@ -2,6 +2,9 @@
 # Install a code-only release from /data/app/incoming and roll back on failure.
 set -euo pipefail
 export PATH=/usr/bin:/bin
+# A dropped SSH link must not kill the updater before its health check: that
+# would leave the rollback note behind and undo a good release at the next boot.
+trap '' HUP
 
 [[ "$(id -u)" -ne 0 ]] || {
   echo "piccie-update must run as the unprivileged pi user" >&2
@@ -10,10 +13,24 @@ export PATH=/usr/bin:/bin
 
 ARCHIVE="${1:-}"
 APP_DIR=/data/app
+PYTHON=/opt/piccie/venv/bin/python
+HEALTH_TRIES=30
+if [[ "${BASH_SOURCE[0]}" != "/usr/local/sbin/piccie-update" ]]; then
+  # Test seams (image/test-update.sh); the installed updater ignores them.
+  APP_DIR="${PICCIE_UPDATE_APP_DIR:-${APP_DIR}}"
+  PYTHON="${PICCIE_UPDATE_PYTHON:-${PYTHON}}"
+  HEALTH_TRIES="${PICCIE_UPDATE_HEALTH_TRIES:-${HEALTH_TRIES}}"
+  PATH="${PICCIE_UPDATE_TEST_BIN:+${PICCIE_UPDATE_TEST_BIN}:}${PATH}"
+fi
 INCOMING="${APP_DIR}/incoming"
 RELEASES="${APP_DIR}/releases"
 CURRENT="${APP_DIR}/current"
-PYTHON=/opt/piccie/venv/bin/python
+# Present from just before the switch until the new release proves healthy. If
+# the booth loses power in between, piccie-engine.service restores it at boot.
+ROLLBACK="${APP_DIR}/rollback"
+# On tmpfs, so it vanishes at power-off: tells the engine unit "the updater is
+# running and will roll back itself".
+UPDATING=/dev/shm/piccie-update
 
 case "${ARCHIVE}" in
   "${INCOMING}"/*.tar.gz) ;;
@@ -56,25 +73,31 @@ done
 # rollbackable; a dependency change requires a versioned appliance image.
 if ! cmp -s "${CURRENT}/requirements.txt" "${TMP}/requirements.txt"; then
   echo "dependencies changed; install a new appliance image for this release" >&2
+  rm -f -- "${ARCHIVE}"
   exit 3
 fi
 if ! cmp -s "${CURRENT}/constraints.txt" "${TMP}/constraints.txt"; then
   echo "dependency constraints changed; install a new appliance image for this release" >&2
+  rm -f -- "${ARCHIVE}"
   exit 3
 fi
 
 "${PYTHON}" -m compileall -q "${TMP}/engine"
 mv "${TMP}" "${DEST}"
-trap - EXIT
+trap 'rm -f -- "${UPDATING}"' EXIT
 
 PREVIOUS="$(readlink -f "${CURRENT}")"
+: >"${UPDATING}"
+printf '%s\n' "${PREVIOUS}" >"${ROLLBACK}"
+# The new files and the rollback note must be on disk before the link moves.
+sync -f "${DEST}"
 rm -f -- "${APP_DIR}/current.next"
 ln -s "${DEST}" "${APP_DIR}/current.next"
 mv -Tf "${APP_DIR}/current.next" "${CURRENT}"
 sudo -n /usr/local/sbin/piccie-restart-engine
 
 HEALTHY=false
-for _ in $(seq 1 30); do
+for _ in $(seq 1 "${HEALTH_TRIES}"); do
   if curl -fsS http://127.0.0.1:8080/api/status >/dev/null 2>&1; then
     HEALTHY=true
     break
@@ -87,9 +110,14 @@ if [[ "${HEALTHY}" != true ]]; then
   rm -f -- "${APP_DIR}/current.next"
   ln -s "${PREVIOUS}" "${APP_DIR}/current.next"
   mv -Tf "${APP_DIR}/current.next" "${CURRENT}"
+  rm -f -- "${ROLLBACK}"
   sudo -n /usr/local/sbin/piccie-restart-engine
+  # A failed release must not count as one of the kept fallbacks.
+  rm -rf -- "${DEST}"
+  rm -f -- "${ARCHIVE}"
   exit 4
 fi
+rm -f -- "${ROLLBACK}"
 
 # Chromium can keep running the old JavaScript after the atomic release switch.
 # The openbox loop relaunches it against the now-healthy engine.

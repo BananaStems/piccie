@@ -811,3 +811,15 @@ def test_gallery_thumbnail_is_small_and_cached(client):
     assert cached.stat().st_mtime_ns == stamp
     # The full photo is unchanged for everything else that uses it.
     assert test_client.get(f"/api/sessions/{session.id}/photos/1").content == photo.read_bytes()
+
+
+def test_degraded_storage_never_asks_for_first_time_setup(tmp_path, monkeypatch):
+    from engine.api import routes
+
+    monkeypatch.setenv("PICCIE_ONBOARDING", "1")
+    monkeypatch.setenv("PICCIE_ONBOARDING_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(routes, "appliance_qemu", lambda: False)
+    monkeypatch.setattr(routes, "data_degraded", lambda: False)
+    assert routes._onboarding_required()
+    monkeypatch.setattr(routes, "data_degraded", lambda: True)
+    assert not routes._onboarding_required()

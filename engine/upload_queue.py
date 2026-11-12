@@ -222,7 +222,8 @@ class UploadQueue:
                     self.check_cloud_health()
                 self.resume_pending()
                 self.retry_pending_deletions()
-                self.storage.prune_abandoned_sessions()
+                # No pruning here: it runs at boot only. A clock jump when Wi-Fi
+                # arrives would make the session a guest is in look days old.
             except Exception as exc:  # noqa: BLE001 - a rescan error must not kill the loop
                 logger.warning("Upload rescan failed: %s", exc)
 

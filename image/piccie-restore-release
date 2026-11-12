@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# Run before every engine start. If piccie-update left its rollback note and is
+# no longer running, power was cut (or the updater died) before the new release
+# proved healthy: point `current` back at the release that worked.
+set -uo pipefail
+
+APP_DIR=/data/app
+UPDATING=/dev/shm/piccie-update
+if [[ "${BASH_SOURCE[0]}" != "/usr/local/sbin/piccie-restore-release" ]]; then
+  # Test seams (image/test-update.sh); the installed helper ignores them.
+  APP_DIR="${PICCIE_UPDATE_APP_DIR:-${APP_DIR}}"
+  UPDATING="${PICCIE_UPDATE_FLAG:-${UPDATING}}"
+fi
+NOTE="${APP_DIR}/rollback"
+
+[[ -s "${NOTE}" && ! -e "${UPDATING}" ]] || exit 0
+PREVIOUS="$(<"${NOTE}")"
+if [[ -d "${PREVIOUS}" ]]; then
+  ln -sfn -- "${PREVIOUS}" "${APP_DIR}/current"
+  echo "piccie-restore-release: update was never confirmed healthy; restored ${PREVIOUS}"
+fi
+rm -f -- "${NOTE}"

@@ -342,9 +342,18 @@ class Storage:
         base = r2_named_event_folder(name, date)
         candidate = base
         suffix = 2
+        # A folder still queued for cloud deletion is taken too: reusing it would
+        # let the queued delete of an old event wipe the new event's uploads.
         while conn.execute(
-            "SELECT 1 FROM events WHERE r2_folder = ? AND id != COALESCE(?, '')",
-            (candidate, exclude_event_id),
+            """
+            SELECT 1 FROM events WHERE r2_folder = :folder AND id != :own
+            UNION ALL
+            SELECT 1 FROM r2_deletions
+            WHERE (basename LIKE 'named-event%:' || :folder
+                   OR basename LIKE 'named-event-session:%:' || :folder || ':%')
+              AND basename NOT LIKE '%:' || :own || ':%'
+            """,
+            {"folder": candidate, "own": exclude_event_id or ""},
         ).fetchone():
             candidate = f"{base}-{suffix}"
             suffix += 1
@@ -932,7 +941,8 @@ class Storage:
         for row in rows:
             session = self._row_to_session(row)
             session_dir = Path(session.local_path)
-            if (session_dir / "strip.jpg").exists() and session.upload_status != "corrupt":
+            # A good strip is a guest's photo even when its upload was marked corrupt.
+            if jpeg_is_intact(session_dir / "strip.jpg"):
                 continue
             try:
                 created = datetime.fromisoformat(session.created_at)
